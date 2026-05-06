@@ -1,3 +1,5 @@
+import { type ChannelMessageType, parseChannelMessageEnvelope } from "@octogent/core";
+
 import { logVerbose } from "../logging";
 import type { ChannelMessage, PersistedTerminal, TerminalSession } from "./types";
 
@@ -47,10 +49,18 @@ export const createChannelMessaging = (deps: {
       toTerminalId: string,
       fromTerminalId: string,
       content: string,
+      explicitType?: ChannelMessageType,
     ): ChannelMessage | null {
       if (!terminals.has(toTerminalId)) {
         return null;
       }
+
+      // Senders can pass an explicit `type`; otherwise we infer it from a
+      // leading `DONE:` / `BLOCKED:` / `ASSIGN:` / `INFO:` prefix in the
+      // content. The stored `content` is unchanged so existing prompts that
+      // grep the body keep working; the typed field is for new consumers
+      // (octoboss router, swarm parent auto-cleanup, future UI).
+      const type = explicitType ?? parseChannelMessageEnvelope(content).type;
 
       channelMessageCounter += 1;
       const message: ChannelMessage = {
@@ -58,6 +68,7 @@ export const createChannelMessaging = (deps: {
         fromTerminalId,
         toTerminalId,
         content,
+        type,
         timestamp: new Date().toISOString(),
         delivered: false,
       };
@@ -67,7 +78,7 @@ export const createChannelMessaging = (deps: {
       channelQueues.set(toTerminalId, queue);
 
       logVerbose(
-        `[Channel] Queued message ${message.messageId} from=${fromTerminalId} to=${toTerminalId}`,
+        `[Channel] Queued message ${message.messageId} type=${type} from=${fromTerminalId} to=${toTerminalId}`,
       );
 
       // If the target session is idle, deliver immediately.

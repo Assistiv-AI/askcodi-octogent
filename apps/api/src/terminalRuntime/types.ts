@@ -121,6 +121,10 @@ export type PersistedTerminal = {
   terminalId: string;
   tentacleId: string;
   worktreeId?: string;
+  // Name of the registered repo this terminal's worktree (or shared cwd)
+  // belongs to. Optional and only meaningful in multi-repo workspaces; when
+  // omitted the runtime falls back to the only registered repo.
+  worktreeRepoName?: string;
   tentacleName: string;
   nameOrigin?: TerminalNameOrigin;
   autoRenamePromptContext?: string | undefined;
@@ -190,4 +194,8 @@ export type CreateTerminalRuntimeOptions = {
   gitClient?: GitClient;
   getApiBaseUrl?: () => string;
   maxConcurrentSessions?: number | undefined;
+  // Optional: callers can inject a `WorkspaceRepos` adapter for tests or to
+  // override repo discovery. When omitted, the runtime constructs one from
+  // `workspaceCwd` and the resolved project state dir.
+  workspaceRepos?: import("../workspace/repos").WorkspaceRepos;
 };

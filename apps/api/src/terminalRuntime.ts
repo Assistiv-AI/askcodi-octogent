@@ -45,6 +45,7 @@ import {
   type TerminalSessionStartDetails,
 } from "./terminalRuntime/types";
 import { createWorktreeManager } from "./terminalRuntime/worktreeManager";
+import { type WorkspaceRepos, createWorkspaceRepos } from "./workspace/repos";
 
 export type {
   GitClient,
@@ -64,8 +65,11 @@ export const createTerminalRuntime = ({
   gitClient = createDefaultGitClient(),
   getApiBaseUrl = () => process.env.OCTOGENT_API_ORIGIN ?? "http://127.0.0.1:8787",
   maxConcurrentSessions,
+  workspaceRepos,
 }: CreateTerminalRuntimeOptions) => {
   const stateDir = projectStateDir ?? join(workspaceCwd, ".octogent");
+  const resolvedWorkspaceRepos: WorkspaceRepos =
+    workspaceRepos ?? createWorkspaceRepos(stateDir, workspaceCwd);
   const sessions = new Map<string, TerminalSession>();
   const websocketServer = new WebSocketServer({ noServer: true });
   const terminalEventsWebsocketServer = new WebSocketServer({ noServer: true });
@@ -209,6 +213,7 @@ export const createTerminalRuntime = ({
 
   const worktreeManager = createWorktreeManager({
     workspaceCwd,
+    workspaceRepos: resolvedWorkspaceRepos,
     gitClient,
     terminals,
   });
@@ -469,7 +474,7 @@ export const createTerminalRuntime = ({
     const effectiveWorktreeId = worktreeId ?? tentacleId;
     const shouldCreateWorktree = workspaceMode === "worktree";
     if (shouldCreateWorktree) {
-      worktreeManager.createTentacleWorktree(effectiveWorktreeId, baseRef);
+      worktreeManager.createTentacleWorktree(effectiveWorktreeId, baseRef ? { baseRef } : {});
     }
 
     if (terminal.agentProvider === "claude-code") {

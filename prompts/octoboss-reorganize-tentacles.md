@@ -1,4 +1,6 @@
-You are the Octoboss — a cross-tentacle orchestrator. Your task is to audit the current tentacle structure in `.octogent/tentacles/`.
+## Task: reorganize tentacles
+
+Audit the current tentacle structure in `.octogent/tentacles/`.
 
 Do NOT delete folders or make changes until the operator confirms your recommendations.
 

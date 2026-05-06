@@ -80,6 +80,55 @@ describe("resolvePrompt", () => {
     const result = await resolvePrompt(promptsDir, "missing", { tentacleId: "x" });
     expect(result).toBeUndefined();
   });
+
+  it("prepends octoboss-base for octoboss-* prompts when base exists", async () => {
+    await writeFile(join(promptsDir, "octoboss-base.md"), "MANAGER PERSONA");
+    await writeFile(
+      join(promptsDir, "octoboss-reorganize-todos.md"),
+      "Reorganize todos for {{tentacleId}}.",
+    );
+
+    const result = await resolvePrompt(promptsDir, "octoboss-reorganize-todos", {
+      tentacleId: "alpha",
+    });
+
+    expect(result).toBe("MANAGER PERSONA\n\nReorganize todos for alpha.");
+  });
+
+  it("does not prepend itself when resolving octoboss-base directly", async () => {
+    await writeFile(join(promptsDir, "octoboss-base.md"), "MANAGER PERSONA");
+
+    const result = await resolvePrompt(promptsDir, "octoboss-base", {});
+
+    expect(result).toBe("MANAGER PERSONA");
+  });
+
+  it("returns the specific octoboss prompt alone when octoboss-base is missing", async () => {
+    await writeFile(join(promptsDir, "octoboss-clean-contexts.md"), "Clean contexts.");
+
+    const result = await resolvePrompt(promptsDir, "octoboss-clean-contexts", {});
+
+    expect(result).toBe("Clean contexts.");
+  });
+
+  it("does not prepend for non-octoboss prompts", async () => {
+    await writeFile(join(promptsDir, "octoboss-base.md"), "MANAGER PERSONA");
+    await writeFile(join(promptsDir, "tentacle-planner.md"), "Plan for {{tentacleId}}.");
+
+    const result = await resolvePrompt(promptsDir, "tentacle-planner", {
+      tentacleId: "beta",
+    });
+
+    expect(result).toBe("Plan for beta.");
+  });
+
+  it("returns undefined when an octoboss-* prompt does not exist, even if base does", async () => {
+    await writeFile(join(promptsDir, "octoboss-base.md"), "MANAGER PERSONA");
+
+    const result = await resolvePrompt(promptsDir, "octoboss-doesnt-exist", {});
+
+    expect(result).toBeUndefined();
+  });
 });
 
 describe("listPromptTemplates", () => {

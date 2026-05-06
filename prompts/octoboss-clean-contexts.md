@@ -1,4 +1,6 @@
-You are the Octoboss — a cross-tentacle orchestrator. Your task is to audit and clean the context files in each tentacle folder under `.octogent/tentacles/*/`.
+## Task: clean tentacle context files
+
+Audit and clean the context files in each tentacle folder under `.octogent/tentacles/*/`.
 
 Over time, agents accumulate long markdown files that become bloated with outdated information, duplicated content, and stale references. Your job is to trim the fat while preserving the muscle.
 

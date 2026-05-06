@@ -1,4 +1,8 @@
-import type { WorkspaceSetupStepId } from "@octogent/core";
+import {
+  CHANNEL_MESSAGE_TYPES,
+  type WorkspaceSetupStepId,
+  isChannelMessageType,
+} from "@octogent/core";
 
 import {
   deleteUserPrompt,
@@ -305,7 +309,20 @@ export const handleChannelMessagesRoute: ApiRouteHandler = async (
     return true;
   }
 
-  const message = runtime.sendChannelMessage(terminalId, fromTerminalId, content);
+  const rawType = body && typeof body.type === "string" ? body.type : undefined;
+  if (rawType !== undefined && !isChannelMessageType(rawType)) {
+    writeJson(
+      response,
+      400,
+      {
+        error: `Unknown channel message type '${rawType}'. Allowed: ${CHANNEL_MESSAGE_TYPES.join(", ")}.`,
+      },
+      corsOrigin,
+    );
+    return true;
+  }
+
+  const message = runtime.sendChannelMessage(terminalId, fromTerminalId, content, rawType);
   if (!message) {
     writeJson(response, 404, { error: "Target terminal not found." }, corsOrigin);
     return true;

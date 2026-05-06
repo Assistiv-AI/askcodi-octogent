@@ -4,6 +4,7 @@ import { createServer } from "node:net";
 import { basename, join, resolve } from "node:path";
 
 import {
+  ensureOctogentExcludedFromRepos,
   ensureOctogentGitignoreEntry,
   ensureProjectScaffold,
   loadProjectConfig,
@@ -18,6 +19,7 @@ import {
   collectStartupPrerequisiteReport,
   formatStartupPrerequisiteReport,
 } from "./startupPrerequisites";
+import { discoverRepos } from "./workspace/repos";
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -64,6 +66,7 @@ const initializeProject = (workspaceCwd: string, preferredName?: string) => {
   const hadConfig = loadProjectConfig(workspaceCwd) !== null;
   const projectConfig = ensureProjectScaffold(workspaceCwd, projectName);
   ensureOctogentGitignoreEntry(workspaceCwd);
+  ensureOctogentExcludedFromRepos(discoverRepos(workspaceCwd));
   registerProject(workspaceCwd, projectConfig.displayName);
   const projectStateDir = resolveProjectStateDir(workspaceCwd, projectConfig.displayName);
   migrateStateToGlobal(workspaceCwd, projectStateDir);
@@ -523,6 +526,25 @@ const terminalPrune = async () => {
   }
 };
 
+// Flags on `octogent channel send` that consume the next arg as their value;
+// the message collector skips them so flags can interleave with message words.
+const CHANNEL_SEND_VALUE_FLAGS: readonly string[] = ["--from", "--type"];
+
+const collectChannelSendMessage = (rawArgs: string[]): string => {
+  const skipIndices = new Set<number>();
+  for (let i = 0; i < rawArgs.length; i += 1) {
+    const value = rawArgs[i];
+    if (value !== undefined && CHANNEL_SEND_VALUE_FLAGS.includes(value)) {
+      skipIndices.add(i);
+      skipIndices.add(i + 1);
+    }
+  }
+  return rawArgs
+    .filter((_value, index) => !skipIndices.has(index))
+    .join(" ")
+    .trim();
+};
+
 const channelSend = async () => {
   const terminalId = args[2];
   if (!terminalId || terminalId.startsWith("-")) {
@@ -531,27 +553,16 @@ const channelSend = async () => {
   }
 
   const fromTerminalId = parseFlag("--from") ?? process.env.OCTOGENT_SESSION_ID ?? "";
-  const fromIndex = args.indexOf("--from");
-  const message =
-    fromIndex !== -1
-      ? args
-          .slice(3)
-          .filter((_, index) => {
-            const absoluteIndex = index + 3;
-            return absoluteIndex !== fromIndex && absoluteIndex !== fromIndex + 1;
-          })
-          .join(" ")
-          .trim()
-      : args
-          .slice(3)
-          .filter((value) => !value.startsWith("--from"))
-          .join(" ")
-          .trim();
+  const messageType = parseFlag("--type");
+  const message = collectChannelSendMessage(args.slice(3));
 
   if (!message) {
     console.error("Error: message content is required.");
     process.exit(1);
   }
+
+  const body: Record<string, unknown> = { fromTerminalId, content: message };
+  if (messageType) body.type = messageType;
 
   const apiBase = resolveRuntimeApiBase();
   try {
@@ -560,7 +571,7 @@ const channelSend = async () => {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fromTerminalId, content: message }),
+        body: JSON.stringify(body),
       },
     );
     const data = (await response.json()) as Record<string, unknown>;
@@ -691,6 +702,8 @@ const main = async () => {
   octogent terminal kill <id>          Kill a terminal session or recorded process
   octogent terminal prune              Remove stale, stopped, and exited terminal records
   octogent channel send <id> <msg>     Send a channel message
+    --from <id>                        Sender terminal ID (defaults to OCTOGENT_SESSION_ID)
+    --type <type>                      DONE | BLOCKED | ASSIGN | INFO (inferred from prefix when omitted)
   octogent channel list <id>           List channel messages`);
   process.exit(1);
 };

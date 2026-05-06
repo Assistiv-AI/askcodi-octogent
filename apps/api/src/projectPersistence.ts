@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   appendFileSync,
@@ -9,7 +10,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
+
+import type { WorkspaceRepo } from "./workspace/repos";
 
 export const GLOBAL_OCTOGENT_DIR = join(homedir(), ".octogent");
 export const PROJECTS_FILE = join(GLOBAL_OCTOGENT_DIR, "projects.json");
@@ -281,27 +284,73 @@ export const hasOctogentGitignoreEntry = (workspaceCwd: string) => {
     .includes(".octogent");
 };
 
-export const ensureOctogentGitignoreEntry = (workspaceCwd: string) => {
-  const gitignorePath = join(workspaceCwd, ".gitignore");
-  const entry = ".octogent";
-
-  if (existsSync(gitignorePath)) {
-    const content = readFileSync(gitignorePath, "utf-8");
-    if (
-      content
-        .split("\n")
-        .map((line) => line.trim())
-        .includes(entry)
-    ) {
-      return { changed: false };
-    }
-
-    appendFileSync(gitignorePath, `\n${entry}\n`, "utf-8");
+// Append `entry` as its own line to `filePath` if it isn't already present.
+// Creates the file (and parent directory when `createParentDir` is true) on
+// first write. Idempotent: a second call with the same entry is a no-op.
+const ensureLineInFile = (
+  filePath: string,
+  entry: string,
+  options: { createParentDir?: boolean } = {},
+): { changed: boolean } => {
+  if (existsSync(filePath)) {
+    const present = readFileSync(filePath, "utf-8")
+      .split("\n")
+      .map((line) => line.trim())
+      .includes(entry);
+    if (present) return { changed: false };
+    appendFileSync(filePath, `\n${entry}\n`, "utf-8");
     return { changed: true };
   }
 
-  writeFileSync(gitignorePath, `${entry}\n`, "utf-8");
+  if (options.createParentDir) {
+    const dir = dirname(filePath);
+    if (dir && !existsSync(dir)) mkdirSync(dir, { recursive: true });
+  }
+  writeFileSync(filePath, `${entry}\n`, "utf-8");
   return { changed: true };
+};
+
+export const ensureOctogentGitignoreEntry = (workspaceCwd: string) =>
+  ensureLineInFile(join(workspaceCwd, ".gitignore"), ".octogent");
+
+const OCTOGENT_EXCLUDE_ENTRY = ".octogent/";
+
+// Resolve the absolute path of a repo's `info/exclude` file. Uses
+// `git rev-parse --git-path` so worktree-pointer setups (where `.git` is a
+// file pointing at a parent) resolve correctly without bespoke parsing.
+const resolveInfoExcludePath = (repoPath: string): string | null => {
+  try {
+    const raw = execFileSync("git", ["-C", repoPath, "rev-parse", "--git-path", "info/exclude"], {
+      encoding: "utf-8",
+    }).trim();
+    if (!raw) return null;
+    return isAbsolute(raw) ? raw : join(repoPath, raw);
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * For each child repo in a multi-repo workspace, append `.octogent/` to its
+ * local `.git/info/exclude` file. This is per-checkout and never committed,
+ * so collaborators cloning the repo are not affected. It complements
+ * `ensureOctogentGitignoreEntry`: the gitignore handles the case where the
+ * workspace folder itself is the repo; the exclude handles the case where
+ * the workspace folder is a parent of one or more repos.
+ *
+ * Returns the list of paths that were modified (newly created or appended to).
+ */
+export const ensureOctogentExcludedFromRepos = (repos: WorkspaceRepo[]) => {
+  const changed: string[] = [];
+  for (const repo of repos) {
+    const excludePath = resolveInfoExcludePath(repo.path);
+    if (!excludePath) continue;
+    const result = ensureLineInFile(excludePath, OCTOGENT_EXCLUDE_ENTRY, {
+      createParentDir: true,
+    });
+    if (result.changed) changed.push(excludePath);
+  }
+  return { changed };
 };
 
 export const migrateStateToGlobal = (workspaceCwd: string, projectStateDir: string) => {

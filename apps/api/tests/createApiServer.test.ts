@@ -3053,6 +3053,147 @@ describe("createApiServer", () => {
     );
   });
 
+  it("POST /api/swarm-plans returns a plan preview without creating any terminals", async () => {
+    const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+    temporaryDirectories.push(workspaceCwd);
+    mkdirSync(join(workspaceCwd, ".octogent", "tentacles", "api-runtime"), { recursive: true });
+    writeFileSync(
+      join(workspaceCwd, ".octogent", "tentacles", "api-runtime", "CONTEXT.md"),
+      "# API Runtime\n",
+      "utf8",
+    );
+    writeFileSync(
+      join(workspaceCwd, ".octogent", "tentacles", "api-runtime", "todo.md"),
+      "# Todo\n- [ ] alpha\n- [ ] beta\n",
+      "utf8",
+    );
+
+    const baseUrl = await startServer({ workspaceCwd });
+
+    const previewResponse = await fetch(`${baseUrl}/api/swarm-plans`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ tentacleId: "api-runtime" }),
+    });
+
+    expect(previewResponse.status).toBe(200);
+    const plan = (await previewResponse.json()) as {
+      tentacleId: string;
+      workers: Array<{ terminalId: string; todoIndex: number; todoText: string }>;
+      parent: { terminalId: string } | null;
+    };
+    expect(plan.tentacleId).toBe("api-runtime");
+    expect(plan.parent?.terminalId).toBe("api-runtime-swarm-parent");
+    expect(plan.workers).toHaveLength(2);
+    expect(plan.workers.map((w) => w.terminalId).sort()).toEqual([
+      "api-runtime-swarm-0",
+      "api-runtime-swarm-1",
+    ]);
+
+    // Critical: preview must not have created any terminals.
+    const snapshotsResponse = await fetch(`${baseUrl}/api/terminal-snapshots`, {
+      headers: { Accept: "application/json" },
+    });
+    await expect(snapshotsResponse.json()).resolves.toEqual([]);
+  });
+
+  it("POST /api/swarm-plans is callable repeatedly and is independent of swarm spawn state", async () => {
+    const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+    temporaryDirectories.push(workspaceCwd);
+    mkdirSync(join(workspaceCwd, ".octogent", "tentacles", "api-runtime"), { recursive: true });
+    writeFileSync(
+      join(workspaceCwd, ".octogent", "tentacles", "api-runtime", "CONTEXT.md"),
+      "# API Runtime\n",
+      "utf8",
+    );
+    writeFileSync(
+      join(workspaceCwd, ".octogent", "tentacles", "api-runtime", "todo.md"),
+      "# Todo\n- [ ] x\n",
+      "utf8",
+    );
+
+    const baseUrl = await startServer({ workspaceCwd });
+    const body = JSON.stringify({ tentacleId: "api-runtime" });
+
+    const first = await fetch(`${baseUrl}/api/swarm-plans`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body,
+    });
+    const second = await fetch(`${baseUrl}/api/swarm-plans`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body,
+    });
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    // Same input must produce the same plan.
+    expect(await first.json()).toEqual(await second.json());
+  });
+
+  it("POST /api/swarm-plans returns 400 when tentacleId is missing", async () => {
+    const baseUrl = await startServer();
+
+    const response = await fetch(`${baseUrl}/api/swarm-plans`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "tentacleId is required." });
+  });
+
+  it("POST /api/swarm-plans returns 404 when the tentacle's todo.md is missing", async () => {
+    const baseUrl = await startServer();
+
+    const response = await fetch(`${baseUrl}/api/swarm-plans`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ tentacleId: "ghost-tentacle" }),
+    });
+
+    expect(response.status).toBe(404);
+  });
+
+  it("POST /api/swarm-plans returns 400 when there are no incomplete todos", async () => {
+    const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+    temporaryDirectories.push(workspaceCwd);
+    mkdirSync(join(workspaceCwd, ".octogent", "tentacles", "done-tentacle"), { recursive: true });
+    writeFileSync(
+      join(workspaceCwd, ".octogent", "tentacles", "done-tentacle", "CONTEXT.md"),
+      "# Done\n",
+      "utf8",
+    );
+    writeFileSync(
+      join(workspaceCwd, ".octogent", "tentacles", "done-tentacle", "todo.md"),
+      "# Todo\n- [x] already\n",
+      "utf8",
+    );
+
+    const baseUrl = await startServer({ workspaceCwd });
+
+    const response = await fetch(`${baseUrl}/api/swarm-plans`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ tentacleId: "done-tentacle" }),
+    });
+
+    expect(response.status).toBe(400);
+  });
+
+  it("POST /api/swarm-plans GET returns 405", async () => {
+    const baseUrl = await startServer();
+
+    const response = await fetch(`${baseUrl}/api/swarm-plans`, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+    });
+
+    expect(response.status).toBe(405);
+  });
+
   it("deletes a tentacle and removes it from snapshots", async () => {
     const baseUrl = await startServer();
 
@@ -3311,5 +3452,119 @@ describe("createApiServer", () => {
     });
     expect(listResponse.status).toBe(200);
     await expect(listResponse.json()).resolves.toEqual([]);
+  });
+
+  it("POST /api/channels infers type=DONE from a 'DONE:' content prefix", async () => {
+    const baseUrl = await startServer();
+
+    // Create a target terminal so the channel route doesn't 404.
+    const create = await fetch(`${baseUrl}/api/terminals`, {
+      method: "POST",
+      headers: { Accept: "application/json" },
+    });
+    expect(create.status).toBe(201);
+
+    const response = await fetch(`${baseUrl}/api/channels/terminal-1/messages`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ fromTerminalId: "worker-0", content: "DONE: fixed validation" }),
+    });
+
+    expect(response.status).toBe(201);
+    const message = (await response.json()) as { type: string; content: string };
+    expect(message.type).toBe("DONE");
+    // Stored content is unchanged so existing prompts that grep "DONE:" still work.
+    expect(message.content).toBe("DONE: fixed validation");
+  });
+
+  it("POST /api/channels uses an explicit type when provided, ignoring the body prefix", async () => {
+    const baseUrl = await startServer();
+    const create = await fetch(`${baseUrl}/api/terminals`, {
+      method: "POST",
+      headers: { Accept: "application/json" },
+    });
+    expect(create.status).toBe(201);
+
+    const response = await fetch(`${baseUrl}/api/channels/terminal-1/messages`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        fromTerminalId: "boss",
+        content: "DONE: this is actually an assignment",
+        type: "ASSIGN",
+      }),
+    });
+
+    expect(response.status).toBe(201);
+    const message = (await response.json()) as { type: string };
+    expect(message.type).toBe("ASSIGN");
+  });
+
+  it("POST /api/channels defaults to type=INFO for plain content with no prefix", async () => {
+    const baseUrl = await startServer();
+    const create = await fetch(`${baseUrl}/api/terminals`, {
+      method: "POST",
+      headers: { Accept: "application/json" },
+    });
+    expect(create.status).toBe(201);
+
+    const response = await fetch(`${baseUrl}/api/channels/terminal-1/messages`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ fromTerminalId: "boss", content: "fyi looking at logs" }),
+    });
+
+    expect(response.status).toBe(201);
+    const message = (await response.json()) as { type: string };
+    expect(message.type).toBe("INFO");
+  });
+
+  it("POST /api/channels rejects an unknown type with 400", async () => {
+    const baseUrl = await startServer();
+    const create = await fetch(`${baseUrl}/api/terminals`, {
+      method: "POST",
+      headers: { Accept: "application/json" },
+    });
+    expect(create.status).toBe(201);
+
+    const response = await fetch(`${baseUrl}/api/channels/terminal-1/messages`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ fromTerminalId: "x", content: "hi", type: "OOPS" }),
+    });
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain("Unknown channel message type 'OOPS'");
+    expect(body.error).toContain("DONE");
+  });
+
+  it("GET /api/channels surfaces the inferred type on each stored message", async () => {
+    const baseUrl = await startServer();
+    const create = await fetch(`${baseUrl}/api/terminals`, {
+      method: "POST",
+      headers: { Accept: "application/json" },
+    });
+    expect(create.status).toBe(201);
+
+    await fetch(`${baseUrl}/api/channels/terminal-1/messages`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ fromTerminalId: "w0", content: "DONE: a" }),
+    });
+    await fetch(`${baseUrl}/api/channels/terminal-1/messages`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ fromTerminalId: "w1", content: "BLOCKED: need help" }),
+    });
+
+    const list = await fetch(`${baseUrl}/api/channels/terminal-1/messages`, {
+      headers: { Accept: "application/json" },
+    });
+    expect(list.status).toBe(200);
+    const payload = (await list.json()) as {
+      messages: Array<{ type: string; content: string }>;
+    };
+    expect(payload.messages.map((m) => m.type)).toEqual(["DONE", "BLOCKED"]);
   });
 });

@@ -57,6 +57,7 @@ import {
   isAllowedOriginHeader,
   readHeaderValue,
 } from "./security";
+import { handleSwarmPlanPreviewRoute } from "./swarmPlanRoutes";
 import {
   handleTerminalActionRoute,
   handleTerminalItemRoute,
@@ -126,6 +127,7 @@ const API_ROUTE_MAP: ReadonlyMap<string, readonly ApiRouteHandler[]> = new Map([
       handleDeckVaultFileRoute,
     ],
   ],
+  ["swarm-plans", [handleSwarmPlanPreviewRoute]],
   ["terminal-snapshots", [handleTerminalSnapshotsRoute]],
   ["codex", [handleCodexUsageRoute]],
   ["claude", [handleClaudeUsageRoute]],

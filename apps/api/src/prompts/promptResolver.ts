@@ -31,9 +31,24 @@ export const readPromptTemplate = async (
   }
 };
 
+const OCTOBOSS_PROMPT_PREFIX = "octoboss-";
+const OCTOBOSS_BASE_NAME = "octoboss-base";
+
+// Octoboss prompts share a manager-persona preamble so every session launched
+// from the octoboss seat inherits the "manage the team, never do the work"
+// invariant. Without this, each new octoboss-*.md prompt would re-state the
+// role and drift over time.
+const isOctobossNamespace = (name: string): boolean =>
+  name.startsWith(OCTOBOSS_PROMPT_PREFIX) && name !== OCTOBOSS_BASE_NAME;
+
 /**
  * Read and resolve a prompt template, interpolating the given variables.
  * Returns `undefined` if the template does not exist.
+ *
+ * Prompts whose name starts with `octoboss-` (other than `octoboss-base`
+ * itself) are prepended with the contents of `octoboss-base.md` if present.
+ * If the base file is missing, the specific template is returned alone — the
+ * resolver does not fail closed on a missing preamble.
  */
 export const resolvePrompt = async (
   promptsDir: string,
@@ -44,6 +59,14 @@ export const resolvePrompt = async (
   if (template === undefined) {
     return undefined;
   }
+
+  if (isOctobossNamespace(name)) {
+    const base = await readPromptTemplate(promptsDir, OCTOBOSS_BASE_NAME);
+    if (base !== undefined) {
+      return interpolatePrompt(`${base}\n\n${template}`, variables);
+    }
+  }
+
   return interpolatePrompt(template, variables);
 };
 
