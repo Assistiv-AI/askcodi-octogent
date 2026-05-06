@@ -33,6 +33,23 @@ type CreateTentacleWorktreeOptions = {
   /** Override the branch name. Defaults to `octogent/<worktreeId>`. Used by
    * the swarm flow to anchor worker worktrees on `octogent/<tentacleId>/worker-<n>`. */
   branchName?: string;
+  /** When non-empty, configure sparse-checkout on the freshly-created
+   * worktree to limit on-disk files to these paths (octogent/<...>/cone). */
+  sparsePaths?: ReadonlyArray<string>;
+};
+
+/** Validates a multi-segment repo-relative path for use with git sparse-checkout.
+ * Rejects empty strings, absolute paths, traversal sequences, and leading `-`
+ * (which git would interpret as a flag). Distinct from `assertSafePathSegment`
+ * above, which validates a single dirname/filename segment. */
+const isSafeRelativePath = (path: string): boolean => {
+  if (path.length === 0) return false;
+  if (path.startsWith("/")) return false;
+  if (path.startsWith("-")) return false;
+  if (path === "..") return false;
+  if (path.startsWith("../")) return false;
+  if (path.includes("/../") || path.endsWith("/..")) return false;
+  return true;
 };
 
 type CreateTentacleIntegrationWorktreeOptions = {
@@ -155,6 +172,21 @@ export const createWorktreeManager = ({
       });
     } catch (error) {
       throw new Error(`Unable to create worktree for ${tentacleId}: ${toErrorMessage(error)}`);
+    }
+
+    if (options.sparsePaths && options.sparsePaths.length > 0) {
+      for (const path of options.sparsePaths) {
+        if (!isSafeRelativePath(path)) {
+          throw new RuntimeInputError(`Invalid sparse path: ${path}`);
+        }
+      }
+      try {
+        gitClient.setSparseCheckout({ cwd: worktreePath, paths: options.sparsePaths });
+      } catch (error) {
+        throw new Error(
+          `Unable to apply sparse-checkout to ${worktreePath}: ${toErrorMessage(error)}`,
+        );
+      }
     }
   };
 

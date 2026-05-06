@@ -244,6 +244,16 @@ export const createDefaultGitClient = (): GitClient => ({
     });
   },
 
+  setSparseCheckout({ cwd, paths }) {
+    // `--` terminates flag parsing so paths starting with `-` are not
+    // interpreted as flags. Callers also pre-validate path shape via
+    // `isSafeRelativePath` in worktreeManager before reaching this code.
+    execFileSync("git", ["sparse-checkout", "set", "--cone", "--", ...paths], {
+      cwd,
+      stdio: "pipe",
+    });
+  },
+
   readWorktreeStatus({ cwd }) {
     const branchName = runGitCommand(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]);
     const hasHeadCommit = readOptionalGitCommand(cwd, ["rev-parse", "--verify", "HEAD"]) !== null;

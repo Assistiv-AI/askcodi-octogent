@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type SwarmPlanInput, planSwarm } from "../src/swarmPlanner";
+import { type SwarmPlanInput, partitionByOverlap, planSwarm } from "../src/swarmPlanner";
 
 const baseInput = (overrides: Partial<SwarmPlanInput> = {}): SwarmPlanInput => ({
   tentacleId: "api-runtime",
@@ -307,6 +307,114 @@ describe("planSwarm — per-worker spawnCommand", () => {
     for (const worker of plan.workers) {
       expect(plan.parent?.promptVariables.workerSpawnCommands).toContain(worker.spawnCommand);
     }
+  });
+});
+
+describe("partitionByOverlap", () => {
+  it("returns identity grouping with predicted paths per todo when predictions exist", () => {
+    const todos = [{ index: 0 }, { index: 1 }];
+    const result = partitionByOverlap(todos, { 0: ["src/a.ts"], 1: ["src/b.ts", "src/c.ts"] }, 9);
+    expect(result).toEqual([
+      { todoIndices: [0], paths: ["src/a.ts"] },
+      { todoIndices: [1], paths: ["src/b.ts", "src/c.ts"] },
+    ]);
+  });
+
+  it("returns empty paths for todos without predictions", () => {
+    const result = partitionByOverlap([{ index: 0 }, { index: 1 }], { 1: ["src/b.ts"] }, 9);
+    expect(result[0]?.paths).toEqual([]);
+    expect(result[1]?.paths).toEqual(["src/b.ts"]);
+  });
+
+  it("dedupes paths within a single todo's predictions", () => {
+    const result = partitionByOverlap([{ index: 0 }], { 0: ["a", "a", "b"] }, 9);
+    expect(result[0]?.paths).toEqual(["a", "b"]);
+  });
+
+  it("caps the result at k todos when there are more", () => {
+    const todos = Array.from({ length: 12 }, (_, i) => ({ index: i }));
+    const result = partitionByOverlap(todos, undefined, 5);
+    expect(result).toHaveLength(5);
+  });
+
+  it("returns an empty array when given no todos", () => {
+    expect(partitionByOverlap([], undefined, 9)).toEqual([]);
+  });
+});
+
+describe("planSwarm — sparsePaths from scopePredictions", () => {
+  it("attaches sparsePaths to workers in worktree mode when predictions are provided", () => {
+    const plan = planSwarm({
+      tentacleId: "t",
+      tentacleName: "T",
+      tentacleContextPath: "/ws/.octogent/tentacles/t",
+      todos: [
+        { index: 0, text: "a" },
+        { index: 1, text: "b" },
+      ],
+      workerWorkspaceMode: "worktree",
+      baseRef: "HEAD",
+      parentBaseBranch: "main",
+      apiPort: 8787,
+      maxChildrenPerParent: 9,
+      useTentacleBranches: false,
+      scopePredictions: { 0: ["src/api/"], 1: ["src/web/"] },
+    });
+    expect(plan.workers[0]?.sparsePaths).toEqual(["src/api/"]);
+    expect(plan.workers[1]?.sparsePaths).toEqual(["src/web/"]);
+  });
+
+  it("emits --sparse-paths in spawnCommand when paths are present", () => {
+    const plan = planSwarm({
+      tentacleId: "t",
+      tentacleName: "T",
+      tentacleContextPath: "/ws/.octogent/tentacles/t",
+      todos: [{ index: 0, text: "a" }],
+      workerWorkspaceMode: "worktree",
+      baseRef: "HEAD",
+      parentBaseBranch: "main",
+      apiPort: 8787,
+      maxChildrenPerParent: 9,
+      useTentacleBranches: false,
+      scopePredictions: { 0: ["src/foo"] },
+    });
+    expect(plan.workers[0]?.spawnCommand).toContain("--sparse-paths");
+    expect(plan.workers[0]?.spawnCommand).toContain("src/foo");
+  });
+
+  it("omits sparsePaths in shared mode even when predictions are provided", () => {
+    const plan = planSwarm({
+      tentacleId: "t",
+      tentacleName: "T",
+      tentacleContextPath: "/ws/.octogent/tentacles/t",
+      todos: [{ index: 0, text: "a" }],
+      workerWorkspaceMode: "shared",
+      baseRef: "HEAD",
+      parentBaseBranch: "main",
+      apiPort: 8787,
+      maxChildrenPerParent: 9,
+      useTentacleBranches: false,
+      scopePredictions: { 0: ["src/foo"] },
+    });
+    expect(plan.workers[0]?.sparsePaths).toBeUndefined();
+    expect(plan.workers[0]?.spawnCommand).not.toContain("--sparse-paths");
+  });
+
+  it("does not emit --sparse-paths when predictions are absent", () => {
+    const plan = planSwarm({
+      tentacleId: "t",
+      tentacleName: "T",
+      tentacleContextPath: "/ws/.octogent/tentacles/t",
+      todos: [{ index: 0, text: "a" }],
+      workerWorkspaceMode: "worktree",
+      baseRef: "HEAD",
+      parentBaseBranch: "main",
+      apiPort: 8787,
+      maxChildrenPerParent: 9,
+      useTentacleBranches: false,
+    });
+    expect(plan.workers[0]?.sparsePaths).toBeUndefined();
+    expect(plan.workers[0]?.spawnCommand).not.toContain("--sparse-paths");
   });
 });
 

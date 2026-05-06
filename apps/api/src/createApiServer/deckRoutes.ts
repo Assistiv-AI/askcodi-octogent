@@ -747,6 +747,7 @@ export const handleDeckTentacleSwarmRoute: ApiRouteHandler = async (
     apiPort,
     maxChildrenPerParent: MAX_CHILDREN_PER_PARENT,
     useTentacleBranches: loaded.inputs.useTentacleBranches,
+    ...(loaded.inputs.scopePredictions ? { scopePredictions: loaded.inputs.scopePredictions } : {}),
   });
 
   try {
@@ -793,6 +794,8 @@ export const handleDeckTentacleSwarmRoute: ApiRouteHandler = async (
           : {}),
         ...(workerPrompt ? { initialPrompt: workerPrompt } : {}),
         ...(worker.baseRef ? { baseRef: worker.baseRef } : {}),
+        ...(worker.branchName ? { branchName: worker.branchName } : {}),
+        ...(worker.sparsePaths ? { sparsePaths: worker.sparsePaths } : {}),
       });
     }
   } catch (error) {

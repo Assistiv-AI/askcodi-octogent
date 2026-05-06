@@ -23,6 +23,9 @@ export type LoadedSwarmPlanInputs = {
    * branch (`octogent/<tentacleId>/worker-<n>`). Implies the integration
    * worktree already exists in at least one repo. */
   useTentacleBranches: boolean;
+  /** Per-todo file scope predictions (typically from octoboss) used by the
+   * planner to derive each worker's sparse-checkout paths. */
+  scopePredictions?: Record<number, ReadonlyArray<string>>;
 };
 
 export type LoadSwarmPlanInputsResult =
@@ -107,6 +110,11 @@ export const loadSwarmPlanInputs = (
   const parentBaseBranch =
     workerWorkspaceMode === "worktree" ? (baseRef === "HEAD" ? "main" : baseRef) : "main";
 
+  // Optional `scopePredictions: Record<number, string[]>` from the request
+  // body. When present and well-shaped, the planner uses it to derive each
+  // worker's sparse-checkout paths.
+  const scopePredictions = parseScopePredictions(body.scopePredictions);
+
   return {
     ok: true,
     inputs: {
@@ -117,6 +125,20 @@ export const loadSwarmPlanInputs = (
       parentBaseBranch,
       workerWorkspaceMode,
       useTentacleBranches,
+      ...(scopePredictions ? { scopePredictions } : {}),
     },
   };
+};
+
+const parseScopePredictions = (raw: unknown): Record<number, ReadonlyArray<string>> | undefined => {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const result: Record<number, ReadonlyArray<string>> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    const index = Number(key);
+    if (!Number.isInteger(index) || index < 0) continue;
+    if (!Array.isArray(value)) continue;
+    const paths = value.filter((p): p is string => typeof p === "string" && p.length > 0);
+    if (paths.length > 0) result[index] = paths;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
 };

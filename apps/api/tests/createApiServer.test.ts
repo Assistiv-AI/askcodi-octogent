@@ -119,6 +119,16 @@ class FakeGitClient implements GitClient {
     this.branches.delete(branchName);
   }
 
+  private readonly sparsePathsByCwd = new Map<string, ReadonlyArray<string>>();
+
+  setSparseCheckout({ cwd, paths }: { cwd: string; paths: ReadonlyArray<string> }): void {
+    this.sparsePathsByCwd.set(cwd, [...paths]);
+  }
+
+  getSparsePaths(cwd: string): ReadonlyArray<string> | undefined {
+    return this.sparsePathsByCwd.get(cwd);
+  }
+
   setRepositoryAvailable(available: boolean): void {
     this.repositoryAvailable = available;
   }
@@ -4004,6 +4014,90 @@ describe("createApiServer", () => {
       expect(swarmResponse.status).toBe(400);
       const body = (await swarmResponse.json()) as { error: string };
       expect(body.error).toMatch(/repoName/i);
+    });
+
+    it("applies sparse-checkout on the worktree when sparsePaths is provided", async () => {
+      const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+      temporaryDirectories.push(workspaceCwd);
+      const gitClient = new FakeGitClient();
+      const baseUrl = await startServer({ workspaceCwd, gitClient });
+
+      const create = await fetch(`${baseUrl}/api/terminals`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workspaceMode: "worktree",
+          sparsePaths: ["src/api/", "packages/core/"],
+        }),
+      });
+      expect(create.status).toBe(201);
+
+      const worktreePath = join(workspaceCwd, ".octogent", "worktrees", "terminal-1");
+      expect(gitClient.getSparsePaths(worktreePath)).toEqual(["src/api/", "packages/core/"]);
+    });
+
+    it("does not invoke sparse-checkout when sparsePaths is omitted", async () => {
+      const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+      temporaryDirectories.push(workspaceCwd);
+      const gitClient = new FakeGitClient();
+      const baseUrl = await startServer({ workspaceCwd, gitClient });
+
+      const create = await fetch(`${baseUrl}/api/terminals`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceMode: "worktree" }),
+      });
+      expect(create.status).toBe(201);
+
+      const worktreePath = join(workspaceCwd, ".octogent", "worktrees", "terminal-1");
+      expect(gitClient.getSparsePaths(worktreePath)).toBeUndefined();
+    });
+
+    it("rejects sparsePaths that start with '-' (git would treat them as flags)", async () => {
+      const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+      temporaryDirectories.push(workspaceCwd);
+      const baseUrl = await startServer({ workspaceCwd, gitClient: new FakeGitClient() });
+
+      const create = await fetch(`${baseUrl}/api/terminals`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceMode: "worktree", sparsePaths: ["--exec=evil"] }),
+      });
+      expect(create.status).toBe(400);
+    });
+
+    it("surfaces a 500 when the git client throws on setSparseCheckout", async () => {
+      const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+      temporaryDirectories.push(workspaceCwd);
+      const gitClient = new FakeGitClient();
+      gitClient.setSparseCheckout = () => {
+        throw new Error("disk full");
+      };
+      const baseUrl = await startServer({ workspaceCwd, gitClient });
+
+      const create = await fetch(`${baseUrl}/api/terminals`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceMode: "worktree", sparsePaths: ["src/api/"] }),
+      });
+      expect(create.status).toBe(500);
+    });
+
+    it("rejects sparsePaths that try to escape the worktree", async () => {
+      const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+      temporaryDirectories.push(workspaceCwd);
+      const gitClient = new FakeGitClient();
+      const baseUrl = await startServer({ workspaceCwd, gitClient });
+
+      const create = await fetch(`${baseUrl}/api/terminals`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workspaceMode: "worktree",
+          sparsePaths: ["../escape"],
+        }),
+      });
+      expect(create.status).toBe(400);
     });
 
     it("forwards branchName and baseRef from POST /api/terminals to the git worktree creation", async () => {

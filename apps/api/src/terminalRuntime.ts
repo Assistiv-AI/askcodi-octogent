@@ -412,6 +412,7 @@ export const createTerminalRuntime = ({
     initialInputDraft,
     baseRef,
     branchName,
+    sparsePaths,
     parentTerminalId,
     nameOrigin,
     autoRenamePromptContext,
@@ -426,6 +427,7 @@ export const createTerminalRuntime = ({
     initialInputDraft?: string;
     baseRef?: string;
     branchName?: string;
+    sparsePaths?: ReadonlyArray<string>;
     parentTerminalId?: string;
     nameOrigin?: TerminalNameOrigin;
     autoRenamePromptContext?: string;
@@ -486,9 +488,14 @@ export const createTerminalRuntime = ({
     const effectiveWorktreeId = worktreeId ?? tentacleId;
     const shouldCreateWorktree = workspaceMode === "worktree";
     if (shouldCreateWorktree) {
-      const worktreeOptions: { baseRef?: string; branchName?: string } = {};
+      const worktreeOptions: {
+        baseRef?: string;
+        branchName?: string;
+        sparsePaths?: ReadonlyArray<string>;
+      } = {};
       if (baseRef) worktreeOptions.baseRef = baseRef;
       if (branchName) worktreeOptions.branchName = branchName;
+      if (sparsePaths && sparsePaths.length > 0) worktreeOptions.sparsePaths = sparsePaths;
       worktreeManager.createTentacleWorktree(effectiveWorktreeId, worktreeOptions);
     }
 

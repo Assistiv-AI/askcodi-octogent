@@ -409,6 +409,7 @@ const terminalCreate = async () => {
   const promptVariables = parseJsonFlag("--prompt-variables");
   const baseRef = parseFlag("--base-ref");
   const branchName = parseFlag("--branch-name");
+  const sparsePaths = parseJsonFlag("--sparse-paths");
   const apiBase = resolveRuntimeApiBase();
 
   const body: Record<string, unknown> = {};
@@ -425,6 +426,7 @@ const terminalCreate = async () => {
   if (promptVariables) body.promptVariables = promptVariables;
   if (baseRef) body.baseRef = baseRef;
   if (branchName) body.branchName = branchName;
+  if (Array.isArray(sparsePaths) && sparsePaths.length > 0) body.sparsePaths = sparsePaths;
 
   try {
     const response = await fetch(`${apiBase}/api/terminals`, {
@@ -701,6 +703,7 @@ const main = async () => {
     --parent-terminal-id               Parent terminal ID for child terminals
     --base-ref                         Git ref to branch from (worktree mode)
     --branch-name                      Override worktree branch name (defaults to octogent/<worktreeId>)
+    --sparse-paths                     JSON array of repo-relative paths for sparse-checkout
     --prompt-template                  Prompt template name
     --prompt-variables                 JSON object of prompt template variables
   octogent terminal list               List terminal lifecycle state

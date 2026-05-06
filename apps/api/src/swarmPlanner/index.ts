@@ -26,6 +26,10 @@ export type SwarmPlanInput = {
    * on the tentacle integration branch. When false, worker branches use the
    * per-terminal scheme `octogent/<workerTerminalId>`. */
   useTentacleBranches: boolean;
+  /** Optional per-todo file scope predictions (e.g. from octoboss). When
+   * provided, each worker's worktree is configured via sparse-checkout to
+   * limit on-disk files to its assigned paths. Keys are todo indices. */
+  scopePredictions?: Record<number, ReadonlyArray<string>>;
 };
 
 export type SwarmWorkerSpec = {
@@ -43,11 +47,14 @@ export type SwarmWorkerSpec = {
   tentacleName: string;
   autoRenamePromptContext: string;
   /** Ready-to-execute `node bin/octogent terminal create …` command that
-   * spawns this worker. Self-orchestrating tentacle agents (PR5 Task 6)
-   * execute this directly so they don't have to re-derive the flag shape;
-   * the human-triggered swarm parent prompt embeds it via
+   * spawns this worker. Self-orchestrating tentacle agents execute this
+   * directly so they don't have to re-derive the flag shape; the
+   * human-triggered swarm parent prompt embeds the same string via
    * `parent.promptVariables.workerSpawnCommands`. Single source of truth. */
   spawnCommand: string;
+  /** Repo-relative paths the worker's worktree should be sparse-checked-out
+   * to. Empty/omitted means full checkout. Derived from `scopePredictions`. */
+  sparsePaths?: ReadonlyArray<string>;
 };
 
 export type SwarmParentSpec = {
@@ -71,6 +78,38 @@ export type SwarmPlan = {
 };
 
 const shellSingleQuote = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`;
+
+export type WorkerPartition = {
+  todoIndices: number[];
+  paths: string[];
+};
+
+/**
+ * Group todos into up to `k` workers, optionally taking a per-todo file scope
+ * prediction map and using it to minimize cross-worker file overlap.
+ *
+ * V1 behavior: identity grouping. Each todo becomes its own worker (1:1),
+ * and `paths` is `scopePredictions[index]` deduped. Workers beyond the first
+ * `k` are dropped (the planner already defers overflow). The signature is
+ * shaped for future bin-packing across multi-todo workers without breaking
+ * callers — when that lands, it can re-group todos to minimize Σ |path∩path'|.
+ */
+export const partitionByOverlap = (
+  todos: ReadonlyArray<{ index: number }>,
+  scopePredictions: Record<number, ReadonlyArray<string>> | undefined,
+  k: number,
+): WorkerPartition[] => {
+  const limit = Math.max(0, Math.min(k, todos.length));
+  const result: WorkerPartition[] = [];
+  for (let i = 0; i < limit; i += 1) {
+    const todo = todos[i];
+    if (!todo) continue;
+    const predicted = scopePredictions?.[todo.index] ?? [];
+    const paths = Array.from(new Set(predicted.filter((p) => p.length > 0)));
+    result.push({ todoIndices: [todo.index], paths });
+  }
+  return result;
+};
 
 type WorkerTexts = {
   contextIntro: string;
@@ -270,6 +309,7 @@ const buildWorkerSpawnCommand = ({
   promptVariables,
   branchName,
   baseRef,
+  sparsePaths,
 }: {
   workerTerminalId: string;
   tentacleId: string;
@@ -279,6 +319,7 @@ const buildWorkerSpawnCommand = ({
   promptVariables: Record<string, string>;
   branchName?: string;
   baseRef?: string;
+  sparsePaths?: ReadonlyArray<string>;
 }): string => {
   const variablesJson = JSON.stringify(promptVariables);
   // Parent terminal id resolves at execution time via the PTY env var the
@@ -304,6 +345,9 @@ const buildWorkerSpawnCommand = ({
     }
     if (branchName) {
       commandParts.push(`--branch-name ${shellSingleQuote(branchName)}`);
+    }
+    if (sparsePaths && sparsePaths.length > 0) {
+      commandParts.push(`--sparse-paths ${shellSingleQuote(JSON.stringify(sparsePaths))}`);
     }
   }
   return commandParts.join(" ");
@@ -341,6 +385,7 @@ export const planSwarm = (input: SwarmPlanInput): SwarmPlan => {
     apiPort,
     maxChildrenPerParent,
     useTentacleBranches,
+    scopePredictions,
   } = input;
 
   const apiPortString = typeof apiPort === "number" ? String(apiPort) : apiPort;
@@ -362,7 +407,9 @@ export const planSwarm = (input: SwarmPlanInput): SwarmPlan => {
   const needsParent = targets.length > 1;
   const parentTerminalId = needsParent ? `${tentacleId}-swarm-parent` : null;
 
-  const workers: SwarmWorkerSpec[] = targets.map((todo) => {
+  const partitions = partitionByOverlap(targets, scopePredictions, maxChildrenPerParent);
+
+  const workers: SwarmWorkerSpec[] = targets.map((todo, i) => {
     const workerTerminalId = `${tentacleId}-swarm-${todo.index}`;
     const branchName =
       workerWorkspaceMode === "worktree"
@@ -370,6 +417,10 @@ export const planSwarm = (input: SwarmPlanInput): SwarmPlan => {
           ? tentacleWorkerBranchName(tentacleId, todo.index)
           : tentacleBranchName(workerTerminalId)
         : null;
+    const sparsePaths =
+      workerWorkspaceMode === "worktree" && partitions[i] && partitions[i].paths.length > 0
+        ? partitions[i].paths
+        : undefined;
     const promptVariables = buildWorkerPromptVariables({
       tentacleName,
       tentacleId,
@@ -390,6 +441,7 @@ export const planSwarm = (input: SwarmPlanInput): SwarmPlan => {
       promptVariables,
       ...(branchName ? { branchName } : {}),
       ...(workerWorkspaceMode === "worktree" && baseRef ? { baseRef } : {}),
+      ...(sparsePaths ? { sparsePaths } : {}),
     });
     return {
       terminalId: workerTerminalId,
@@ -400,6 +452,7 @@ export const planSwarm = (input: SwarmPlanInput): SwarmPlan => {
       ...(parentTerminalId ? { parentTerminalId } : {}),
       ...(workerWorkspaceMode === "worktree" ? { baseRef } : {}),
       ...(branchName ? { branchName } : {}),
+      ...(sparsePaths ? { sparsePaths } : {}),
       promptTemplate: "swarm-worker" as const,
       promptVariables,
       tentacleName,

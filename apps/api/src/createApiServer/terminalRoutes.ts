@@ -136,6 +136,7 @@ export const handleTerminalsCollectionRoute: ApiRouteHandler = async (
       parentTerminalId?: string;
       baseRef?: string;
       branchName?: string;
+      sparsePaths?: ReadonlyArray<string>;
     } = {
       workspaceMode: workspaceModeResult.workspaceMode,
     };
@@ -197,6 +198,12 @@ export const handleTerminalsCollectionRoute: ApiRouteHandler = async (
       bodyPayload.branchName.trim().length > 0
     ) {
       createTerminalInput.branchName = bodyPayload.branchName.trim();
+    }
+    if (bodyPayload && Array.isArray(bodyPayload.sparsePaths)) {
+      const cleaned = bodyPayload.sparsePaths.filter(
+        (p): p is string => typeof p === "string" && p.trim().length > 0,
+      );
+      if (cleaned.length > 0) createTerminalInput.sparsePaths = cleaned;
     }
 
     // Support prompt resolution via template name + variables, or a raw string.

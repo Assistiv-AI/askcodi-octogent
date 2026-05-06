@@ -74,6 +74,7 @@ export const handleSwarmPlanPreviewRoute: ApiRouteHandler = async (
     apiPort: getApiPort(),
     maxChildrenPerParent: MAX_CHILDREN_PER_PARENT,
     useTentacleBranches: loaded.inputs.useTentacleBranches,
+    ...(loaded.inputs.scopePredictions ? { scopePredictions: loaded.inputs.scopePredictions } : {}),
   });
 
   writeJson(response, 200, plan, corsOrigin);

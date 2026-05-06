@@ -87,6 +87,7 @@ const createFakeGitClient = (
     readCurrentBranchPullRequest: () => null,
     createPullRequest: () => null,
     mergeCurrentBranchPullRequest: () => {},
+    setSparseCheckout: () => {},
   };
 
   return { client, state };

@@ -115,6 +115,8 @@ class FakeGitClient implements GitClient {
   }
 
   mergeCurrentBranchPullRequest(): void {}
+
+  setSparseCheckout(): void {}
 }
 
 describe("monitor API routes", () => {

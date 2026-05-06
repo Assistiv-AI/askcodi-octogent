@@ -184,6 +184,11 @@ export type GitClient = {
     cwd: string;
     strategy: "squash" | "merge" | "rebase";
   }): void;
+  /** Configure sparse-checkout on a worktree to limit on-disk files to the
+   * given paths. Idempotent: calling repeatedly with different paths replaces
+   * the active set. Paths are repo-relative; absolute paths and `..` are
+   * rejected by callers. */
+  setSparseCheckout(options: { cwd: string; paths: ReadonlyArray<string> }): void;
 };
 
 export class RuntimeInputError extends Error {}
