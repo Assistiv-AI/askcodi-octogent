@@ -14,7 +14,13 @@ import { basename, dirname, isAbsolute, join } from "node:path";
 
 import type { WorkspaceRepo } from "./workspace/repos";
 
-export const GLOBAL_OCTOGENT_DIR = join(homedir(), ".octogent");
+// Resolve lazily so tests can override HOME and have all subsequent reads
+// reflect the new value. The exported constants below capture the value at
+// import time for any external consumers that need a stable reference.
+const getGlobalOctogentDir = () => join(homedir(), ".octogent");
+const getProjectsFile = () => join(getGlobalOctogentDir(), "projects.json");
+
+export const GLOBAL_OCTOGENT_DIR = getGlobalOctogentDir();
 export const PROJECTS_FILE = join(GLOBAL_OCTOGENT_DIR, "projects.json");
 export const PROJECT_CONFIG_RELATIVE_PATH = join(".octogent", "project.json");
 
@@ -125,19 +131,20 @@ const readJsonFile = (filePath: string): unknown | null => {
 };
 
 export const ensureGlobalOctogentDir = () => {
-  if (!existsSync(GLOBAL_OCTOGENT_DIR)) {
-    mkdirSync(GLOBAL_OCTOGENT_DIR, { recursive: true });
+  const dir = getGlobalOctogentDir();
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
   }
 };
 
 export const loadProjectsRegistry = (): ProjectsRegistry => {
   ensureGlobalOctogentDir();
-
-  if (!existsSync(PROJECTS_FILE)) {
+  const projectsFile = getProjectsFile();
+  if (!existsSync(projectsFile)) {
     return { projects: [] };
   }
 
-  const parsed = readJsonFile(PROJECTS_FILE);
+  const parsed = readJsonFile(projectsFile);
   if (!isRecord(parsed) || !Array.isArray(parsed.projects)) {
     return { projects: [] };
   }
@@ -151,7 +158,7 @@ export const loadProjectsRegistry = (): ProjectsRegistry => {
 
 export const saveProjectsRegistry = (registry: ProjectsRegistry) => {
   ensureGlobalOctogentDir();
-  writeFileSync(PROJECTS_FILE, `${JSON.stringify(registry, null, 2)}\n`, "utf8");
+  writeFileSync(getProjectsFile(), `${JSON.stringify(registry, null, 2)}\n`, "utf8");
 };
 
 export const resolveProjectConfigPath = (workspaceCwd: string) =>
@@ -161,7 +168,7 @@ export const deriveProjectIdFromWorkspace = (workspaceCwd: string) =>
   `workspace-${createHash("sha1").update(workspaceCwd).digest("hex").slice(0, 16)}`;
 
 const inferLegacyProjectName = (workspaceCwd: string): string | null => {
-  const parsed = readJsonFile(PROJECTS_FILE);
+  const parsed = readJsonFile(getProjectsFile());
   if (!isRecord(parsed) || !Array.isArray(parsed.projects)) {
     return null;
   }
@@ -246,7 +253,7 @@ export const registerProject = (
 };
 
 export const resolveGlobalProjectDir = (projectId: string) =>
-  join(GLOBAL_OCTOGENT_DIR, "projects", projectId);
+  join(getGlobalOctogentDir(), "projects", projectId);
 
 export const resolveEphemeralProjectStateDir = (workspaceCwd: string) =>
   resolveGlobalProjectDir(deriveProjectIdFromWorkspace(workspaceCwd));
@@ -363,7 +370,7 @@ export const migrateStateToGlobal = (workspaceCwd: string, projectStateDir: stri
   const legacyProjectName = inferLegacyProjectName(workspaceCwd);
   const legacyGlobalProjectDir =
     legacyProjectName && currentConfig
-      ? join(GLOBAL_OCTOGENT_DIR, "projects", legacyProjectName)
+      ? join(getGlobalOctogentDir(), "projects", legacyProjectName)
       : null;
   const oldStateDir = join(fallbackProjectDir, "state");
   const newStateDir = join(projectStateDir, "state");

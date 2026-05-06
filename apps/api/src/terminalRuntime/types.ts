@@ -79,6 +79,15 @@ export type TerminalSession = {
   isInitialPromptSent?: boolean;
   initialInputDraft?: string;
   isInitialInputDraftSent?: boolean;
+  /** Set once the agent has signalled it is ready to accept input (currently
+   * detected by watching for the bracketed-paste-enable sequence in PTY
+   * output). Pasting before this flag is set causes the bracketed-paste
+   * markers to leak into the host shell as raw text. */
+  isAgentInputReady?: boolean;
+  /** Callback queued by `ensureAgentBootstrapped` to inject the initial
+   * prompt or draft. Fires when `isAgentInputReady` flips to true, or when
+   * the readiness fallback timer expires. */
+  pendingInitialInput?: (() => void) | undefined;
   keepAliveWithoutClients?: boolean;
   isClosed?: boolean;
   hasSeenProcessing?: boolean;

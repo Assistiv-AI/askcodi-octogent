@@ -734,7 +734,8 @@ describe("createSessionRuntime", () => {
     expect(sessions.has(tentacleId)).toBe(true);
     expect(pty.write).toHaveBeenNthCalledWith(1, "claude\r");
 
-    vi.advanceTimersByTime(4_000);
+    // Agent signals readiness (bracketed-paste-enable) → prompt fires.
+    pty.emitData("[?2004h");
     expect(pty.write).toHaveBeenNthCalledWith(
       2,
       "\u001b[200~Investigate and report back.\u001b[201~",
@@ -792,10 +793,61 @@ describe("createSessionRuntime", () => {
 
     expect(pty.write).toHaveBeenNthCalledWith(1, "claude\r");
 
-    vi.advanceTimersByTime(4_000);
+    // Agent signals readiness (bracketed-paste-enable) → draft is pasted.
+    pty.emitData("[?2004h");
     expect(pty.write).toHaveBeenNthCalledWith(2, "\u001b[200~You are working on docs.\u001b[201~");
 
     vi.advanceTimersByTime(150);
+    expect(pty.write).toHaveBeenCalledTimes(2);
+
+    runtime.close();
+  });
+
+  it("fires the queued initial input when markAgentReady is called (hook path)", () => {
+    vi.useFakeTimers();
+
+    const tentacleId = "tentacle-1";
+    const terminals = new Map<string, PersistedTerminal>([
+      [
+        tentacleId,
+        {
+          terminalId: tentacleId,
+          tentacleId,
+          tentacleName: tentacleId,
+          createdAt: new Date().toISOString(),
+          workspaceMode: "shared",
+          initialInputDraft: "Hello hook world.",
+        },
+      ],
+    ]);
+    const sessions = new Map<string, TerminalSession>();
+    const websocketServer = new FakeWebSocketServer();
+    const pty = new FakePty();
+    const transcriptDirectoryPath = createTemporaryDirectory();
+    spawnMock.mockReturnValue(pty);
+
+    const runtime = createSessionRuntime({
+      websocketServer: websocketServer as unknown as import("ws").WebSocketServer,
+      terminals,
+      sessions,
+      getTentacleWorkspaceCwd: () => process.cwd(),
+      isDebugPtyLogsEnabled: false,
+      ptyLogDir: process.cwd(),
+      transcriptDirectoryPath,
+      sessionIdleGraceMs: 1_000,
+      scrollbackMaxBytes: 1_024,
+    });
+
+    expect(runtime.startSession(tentacleId)).toBe(true);
+    expect(pty.write).toHaveBeenNthCalledWith(1, "claude\r");
+    expect(pty.write).toHaveBeenCalledTimes(1);
+
+    // Hook fires before any PTY data arrives — draft pastes immediately.
+    expect(runtime.markAgentReady(tentacleId)).toBe(true);
+    expect(pty.write).toHaveBeenNthCalledWith(2, "[200~Hello hook world.[201~");
+
+    // Subsequent calls are no-ops (idempotent).
+    runtime.markAgentReady(tentacleId);
     expect(pty.write).toHaveBeenCalledTimes(2);
 
     runtime.close();

@@ -1630,16 +1630,17 @@ describe("createApiServer", () => {
       expect(createdAtMs).toBeGreaterThanOrEqual(before);
     });
 
-    it("rejects POST when repoName is missing", async () => {
+    it("auto-picks the only registered repo when repoName is omitted", async () => {
       const { baseUrl } = await startServerWithRepo();
       await createDocsTentacle(baseUrl);
 
+      // Single-repo workspace: missing repoName resolves to the only repo.
       const response = await fetch(`${baseUrl}/api/deck/tentacles/docs/worktrees`, {
         method: "POST",
         headers: { Accept: "application/json", "Content-Type": "application/json" },
         body: JSON.stringify({}),
       });
-      expect(response.status).toBe(400);
+      expect(response.status).toBe(201);
     });
 
     it("returns 404 when POSTing to a non-existent tentacle", async () => {
@@ -3988,7 +3989,7 @@ describe("createApiServer", () => {
       expect(parent?.initialPrompt).toContain("--base-ref 'octogent/research'");
     });
 
-    it("returns 400 when multiple repos are registered and no repoName is given", async () => {
+    it("auto-picks the first registered repo when multiple repos are registered and no repoName is given", async () => {
       const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
       temporaryDirectories.push(workspaceCwd);
       mkdirSync(join(workspaceCwd, "frontend"), { recursive: true });
@@ -4011,9 +4012,11 @@ describe("createApiServer", () => {
         headers: { Accept: "application/json", "Content-Type": "application/json" },
         body: JSON.stringify({ workspaceMode: "worktree" }),
       });
-      expect(swarmResponse.status).toBe(400);
-      const body = (await swarmResponse.json()) as { error: string };
-      expect(body.error).toMatch(/repoName/i);
+      // Successful spawn — the route silently picks the first registered
+      // repo (alphabetical: "backend") instead of 400ing on ambiguity.
+      expect(swarmResponse.status).toBe(201);
+      const body = (await swarmResponse.json()) as { tentacleId: string };
+      expect(body.tentacleId).toBe("research");
     });
 
     it("applies sparse-checkout on the worktree when sparsePaths is provided", async () => {

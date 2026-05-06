@@ -136,6 +136,13 @@ export const createWorktreeManager = ({
       return getTentacleWorktreePath(worktreeIdentifier);
     }
 
+    // Shared-mode terminals without a pinned repo live at the workspace root.
+    // In multi-repo workspaces this lets the user `cd` between sibling repos
+    // from a single shell instead of forcing a repo choice up front.
+    if (terminal.worktreeRepoName === undefined) {
+      return workspaceCwd;
+    }
+
     return resolveRepoCwd(terminal.worktreeRepoName);
   };
 

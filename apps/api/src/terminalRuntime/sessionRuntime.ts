@@ -41,6 +41,11 @@ type CreateSessionRuntimeOptions = {
     tentacleId: string;
   } | null;
   getTentacleWorkspaceCwd: (tentacleId: string) => string;
+  /** Called for each spawned PTY so its env carries OCTOGENT_API_BASE.
+   * Workers spawned via `octogent` CLI from inside this PTY then route to
+   * this API server regardless of their cwd, instead of falling back to
+   * runtime.json lookup which is cwd-derived. */
+  getApiBaseUrl?: () => string;
   isDebugPtyLogsEnabled: boolean;
   ptyLogDir: string;
   transcriptDirectoryPath: string;
@@ -64,6 +69,7 @@ export const createSessionRuntime = ({
   sessions,
   resolveTerminalSession,
   getTentacleWorkspaceCwd,
+  getApiBaseUrl,
   isDebugPtyLogsEnabled,
   ptyLogDir,
   transcriptDirectoryPath,
@@ -436,10 +442,18 @@ export const createSessionRuntime = ({
     return true;
   };
 
-  const INITIAL_PROMPT_DELAY_MS = 4_000;
+  // Maximum wait for the agent (claude/codex) to enable bracketed paste mode
+  // before we send the initial input anyway. The agent emits `\x1b[?2004h`
+  // when its prompt loop is ready; if we paste sooner the markers leak into
+  // the host shell as raw text. The fallback covers cases where the agent
+  // never enables bracketed paste (failed to start, network hiccup, etc.).
+  const AGENT_READINESS_TIMEOUT_MS = 20_000;
   const INITIAL_PROMPT_SUBMIT_DELAY_MS = 150;
   const BRACKETED_PASTE_START = "\x1b[200~";
   const BRACKETED_PASTE_END = "\x1b[201~";
+  // Bracketed paste enable (DECSET 2004). Most modern TUIs send this when
+  // they take over the PTY and are ready for keyboard or paste input.
+  const BRACKETED_PASTE_ENABLE = "\x1b[?2004h";
 
   const scheduleIdleCloseIfNeeded = (session: TerminalSession, sessionId: string) => {
     if (session.isClosed || sessions.get(sessionId) !== session) {
@@ -465,6 +479,17 @@ export const createSessionRuntime = ({
     }, sessionIdleGraceMs);
   };
 
+  // Fires the queued initial-input callback if any, exactly once. Called both
+  // when the readiness marker is seen on the PTY and from the fallback timer.
+  const fireAgentInputCallback = (session: TerminalSession) => {
+    const callback = session.pendingInitialInput;
+    if (!callback) {
+      return;
+    }
+    session.pendingInitialInput = undefined;
+    callback();
+  };
+
   const ensureAgentBootstrapped = (sessionId: string, session: TerminalSession) => {
     if (session.isBootstrapCommandSent) {
       return;
@@ -479,15 +504,13 @@ export const createSessionRuntime = ({
     appendDebugLog(session, `bootstrap session=${sessionId} command=${bootstrapCommand}`);
     session.pty.write(`${bootstrapCommand}\r`);
 
-    // Schedule initial prompt injection after Claude Code has had time to boot.
-    if (session.initialPrompt && !session.isInitialPromptSent) {
-      schedulePromptTimer(
-        session,
-        sessionId,
-        () => {
-          if (session.isInitialPromptSent) {
-            return;
-          }
+    // Build the initial-input callback (prompt OR draft, never both — the
+    // existing precedence is preserved). It fires once the agent signals
+    // readiness via bracketed-paste-enable, or after the fallback timeout.
+    const buildPromptCallback = (): (() => void) | null => {
+      if (session.initialPrompt && !session.isInitialPromptSent) {
+        return () => {
+          if (session.isInitialPromptSent) return;
           session.isInitialPromptSent = true;
           appendDebugLog(session, `initial-prompt session=${sessionId}`);
           const prompt = session.initialPrompt ?? "";
@@ -501,27 +524,47 @@ export const createSessionRuntime = ({
             },
             INITIAL_PROMPT_SUBMIT_DELAY_MS,
           );
-        },
-        INITIAL_PROMPT_DELAY_MS,
-      );
-    }
-
-    if (session.initialInputDraft && !session.isInitialInputDraftSent && !session.initialPrompt) {
-      schedulePromptTimer(
-        session,
-        sessionId,
-        () => {
-          if (session.isInitialInputDraftSent) {
-            return;
-          }
+        };
+      }
+      if (session.initialInputDraft && !session.isInitialInputDraftSent && !session.initialPrompt) {
+        return () => {
+          if (session.isInitialInputDraftSent) return;
           session.isInitialInputDraftSent = true;
           appendDebugLog(session, `initial-input-draft session=${sessionId}`);
           const draft = session.initialInputDraft ?? "";
           session.pty.write(`${BRACKETED_PASTE_START}${draft}${BRACKETED_PASTE_END}`);
-        },
-        INITIAL_PROMPT_DELAY_MS,
-      );
+        };
+      }
+      return null;
+    };
+
+    const callback = buildPromptCallback();
+    if (!callback) {
+      return;
     }
+
+    // If the agent has somehow already signalled readiness (rare, but covers
+    // re-bootstrap paths), fire immediately. Otherwise queue and let the PTY
+    // data watcher fire it when it sees the bracketed-paste-enable marker.
+    if (session.isAgentInputReady) {
+      callback();
+      return;
+    }
+
+    session.pendingInitialInput = callback;
+    schedulePromptTimer(
+      session,
+      sessionId,
+      () => {
+        if (!session.pendingInitialInput) return;
+        appendDebugLog(
+          session,
+          `initial-input-fallback session=${sessionId} reason=readiness-timeout`,
+        );
+        fireAgentInputCallback(session);
+      },
+      AGENT_READINESS_TIMEOUT_MS,
+    );
   };
 
   const ensureSession = (sessionId: string, tentacleId: string) => {
@@ -552,12 +595,22 @@ export const createSessionRuntime = ({
         cols: DEFAULT_PTY_COLS,
         rows: DEFAULT_PTY_ROWS,
         cwd: tentacleCwd,
-        env: createShellEnvironment({ octogentSessionId: sessionId }),
+        env: createShellEnvironment({
+          octogentSessionId: sessionId,
+          ...(getApiBaseUrl ? { apiBaseUrl: getApiBaseUrl() } : {}),
+        }),
         name: "xterm-256color",
       });
     } catch (error) {
+      // node-pty's posix_spawn errors on macOS are notoriously generic
+      // ("posix_spawnp failed.") with no errno. Surface the cwd + command
+      // + arch so the user can spot path or arch-mismatch issues at a
+      // glance instead of digging through logs.
+      const detail = toErrorMessage(error);
+      const arch = process.arch;
       throw new Error(
-        `Unable to start terminal shell (${shellLaunch.command}): ${toErrorMessage(error)}`,
+        `Unable to start terminal shell (${shellLaunch.command} ${shellLaunch.args.join(" ")}) ` +
+          `at cwd=${tentacleCwd} arch=${arch}: ${detail}`,
       );
     }
 
@@ -609,6 +662,20 @@ export const createSessionRuntime = ({
 
       appendDebugLog(session, `pty-output session=${sessionId} chunk=${JSON.stringify(chunk)}`);
       appendScrollback(session, chunk);
+
+      // Detect agent readiness. Modern TUIs (claude, codex) emit
+      // bracketed-paste-enable when their input loop is ready to accept
+      // keyboard or paste input. Pasting before this leaks the markers as
+      // raw text into the host shell, so we hold pending prompts until we
+      // see this signal (or the readiness timeout fallback fires).
+      if (!session.isAgentInputReady && chunk.includes(BRACKETED_PASTE_ENABLE)) {
+        session.isAgentInputReady = true;
+        appendDebugLog(session, `agent-ready session=${sessionId}`);
+        if (session.pendingInitialInput) {
+          fireAgentInputCallback(session);
+        }
+      }
+
       const nextState = session.stateTracker.observeChunk(chunk, Date.now());
       broadcastMessage(session, {
         type: "output",
@@ -860,6 +927,26 @@ export const createSessionRuntime = ({
     return true;
   };
 
+  // External signal that the agent is ready for input (e.g. from Claude
+  // Code's SessionStart hook). Fires any queued initial-input callback. The
+  // PTY data watcher does the same thing on bracketed-paste-enable; whichever
+  // arrives first wins. Idempotent.
+  const markAgentReady = (terminalId: string): boolean => {
+    const session = sessions.get(terminalId);
+    if (!session || session.isClosed) {
+      return false;
+    }
+    if (session.isAgentInputReady) {
+      return true;
+    }
+    session.isAgentInputReady = true;
+    appendDebugLog(session, `agent-ready session=${terminalId} source=hook`);
+    if (session.pendingInitialInput) {
+      fireAgentInputCallback(session);
+    }
+    return true;
+  };
+
   return {
     closeSession,
     stopSession,
@@ -870,6 +957,7 @@ export const createSessionRuntime = ({
     writeInput,
     resizeSession,
     releaseSessionKeepAlive,
+    markAgentReady,
     close,
     getSessionCapacity: () => ({
       active: sessions.size,

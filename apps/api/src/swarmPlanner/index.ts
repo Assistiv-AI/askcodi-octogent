@@ -271,11 +271,11 @@ const buildWorkerPromptVariables = ({
         `Your parent coordinator is at terminal \`${parentTerminalId}\`.`,
         "When you complete your task, report back:",
         "```bash",
-        `node bin/octogent channel send ${parentTerminalId} "DONE: ${todoText}" --from ${terminalId}`,
+        `node "$OCTOGENT_BIN" channel send ${parentTerminalId} "DONE: ${todoText}" --from ${terminalId}`,
         "```",
         "If you are blocked, ask for help:",
         "```bash",
-        `node bin/octogent channel send ${parentTerminalId} "BLOCKED: <describe what you need>" --from ${terminalId}`,
+        `node "$OCTOGENT_BIN" channel send ${parentTerminalId} "BLOCKED: <describe what you need>" --from ${terminalId}`,
         "```",
       ].join("\n")
     : "";
@@ -326,8 +326,15 @@ const buildWorkerSpawnCommand = ({
   // runtime sets per session. This works for both the human-triggered swarm
   // parent and a self-spawning tentacle agent — neither needs to know the
   // literal id at planning time.
+  //
+  // OCTOGENT_BIN is the absolute path to the running cli.js, set by the
+  // runtime in the parent's PTY env. Using it (instead of the relative
+  // `bin/octogent`) means the spawn command works no matter which cwd the
+  // parent agent runs from. OCTOGENT_API_BASE (also set in the env) makes
+  // the spawned cli call back into THIS api server, not whichever
+  // `runtime.json` happens to live under the spawn cwd.
   const commandParts = [
-    "node bin/octogent terminal create",
+    'node "$OCTOGENT_BIN" terminal create',
     `--terminal-id ${shellSingleQuote(workerTerminalId)}`,
     `--tentacle-id ${shellSingleQuote(tentacleId)}`,
     '--parent-terminal-id "$OCTOGENT_SESSION_ID"',

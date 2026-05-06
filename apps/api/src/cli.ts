@@ -201,24 +201,7 @@ const maybeOpenBrowser = (url: string) => {
   }
 };
 
-const startServer = async () => {
-  const startupPrerequisiteReport = collectStartupPrerequisiteReport();
-  const startupPrerequisiteLines = formatStartupPrerequisiteReport(startupPrerequisiteReport);
-  if (startupPrerequisiteLines.length > 0) {
-    for (const line of startupPrerequisiteLines) {
-      if (startupPrerequisiteReport.errors.length > 0) {
-        console.error(line);
-      } else {
-        console.warn(line);
-      }
-    }
-    if (startupPrerequisiteReport.errors.length > 0) {
-      process.exit(1);
-    }
-    console.warn("");
-  }
-
-  const workspaceCwd = process.cwd();
+const startProjectServer = async (workspaceCwd: string) => {
   const { isInitialized, projectDisplayName, projectStateDir } =
     resolveStartupProjectContext(workspaceCwd);
   const promptsDir = resolveRuntimeAssetPath(["dist", "prompts"], ["prompts"]);
@@ -273,6 +256,72 @@ const startServer = async () => {
     console.log("  Setup:   workspace is not initialized yet; use the in-app setup flow");
   }
   console.log();
+};
+
+const startLauncher = async (invocationCwd: string) => {
+  const webDistDir = resolveRuntimeAssetPath(["dist", "web"], ["apps", "web", "dist"]);
+  const port = await findOpenPort(readPreferredStartPort());
+  const { createLauncherServer } = await import("./launcher/createLauncherServer");
+
+  const launcherServer = createLauncherServer({
+    invocationCwd,
+    webDistDir: existsSync(webDistDir) ? webDistDir : undefined,
+    allowRemoteAccess: process.env.OCTOGENT_ALLOW_REMOTE_ACCESS === "1",
+  });
+
+  const shutdown = async () => {
+    await launcherServer.stop();
+    process.exit(0);
+  };
+
+  process.on("SIGINT", () => void shutdown());
+  process.on("SIGTERM", () => void shutdown());
+
+  const { host, port: activePort } = await launcherServer.start(port, "127.0.0.1");
+  const launcherUrl = `http://${host}:${activePort}`;
+
+  const hasWebDist = existsSync(webDistDir);
+  if (hasWebDist) {
+    maybeOpenBrowser(launcherUrl);
+  }
+
+  console.log();
+  console.log("  Octogent launcher");
+  console.log(`  Folder:  ${invocationCwd}  (not initialized)`);
+  console.log(`  URL:     ${launcherUrl}`);
+  if (!hasWebDist) {
+    console.log("  UI:      bundled web assets are missing from this install");
+  }
+  console.log("  Run `octogent init` to initialize this folder, or pick a project in the UI.");
+  console.log();
+};
+
+const startServer = async () => {
+  const startupPrerequisiteReport = collectStartupPrerequisiteReport();
+  const startupPrerequisiteLines = formatStartupPrerequisiteReport(startupPrerequisiteReport);
+  if (startupPrerequisiteLines.length > 0) {
+    for (const line of startupPrerequisiteLines) {
+      if (startupPrerequisiteReport.errors.length > 0) {
+        console.error(line);
+      } else {
+        console.warn(line);
+      }
+    }
+    if (startupPrerequisiteReport.errors.length > 0) {
+      process.exit(1);
+    }
+    console.warn("");
+  }
+
+  const workspaceCwd = process.cwd();
+  const cwdHasProject = loadProjectConfig(workspaceCwd) !== null;
+  const skipLauncher = process.env.OCTOGENT_NO_LAUNCHER === "1";
+
+  if (cwdHasProject || skipLauncher) {
+    return startProjectServer(workspaceCwd);
+  }
+
+  return startLauncher(workspaceCwd);
 };
 
 const COLORS = [

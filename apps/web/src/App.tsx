@@ -28,6 +28,7 @@ import { clampSidebarWidth } from "./app/uiStateNormalizers";
 import { ActiveAgentsSidebar } from "./components/ActiveAgentsSidebar";
 import { ConsolePrimaryNav } from "./components/ConsolePrimaryNav";
 import { PrimaryViewRouter } from "./components/PrimaryViewRouter";
+import { ProjectSwitcherModal } from "./components/ProjectSwitcherModal";
 import { RuntimeStatusStrip } from "./components/RuntimeStatusStrip";
 import { SidebarActionPanel } from "./components/SidebarActionPanel";
 import { TelemetryTape } from "./components/TelemetryTape";
@@ -38,6 +39,7 @@ import {
 } from "./runtime/runtimeEndpoints";
 
 export const App = () => {
+  const [isProjectSwitcherOpen, setIsProjectSwitcherOpen] = useState(false);
   const [terminals, setTerminals] = useState<TerminalView>([]);
   const [recentlyCreatedTerminal, setRecentlyCreatedTerminal] = useState<
     TerminalView[number] | null
@@ -319,6 +321,20 @@ export const App = () => {
   });
 
   useConsoleKeyboardShortcuts({ setActivePrimaryNav });
+
+  // Cmd/Ctrl+Shift+O opens the project switcher. Esc inside the modal closes it
+  // (handled by ProjectSwitcherModal itself).
+  useEffect(() => {
+    const handleKey = (event: KeyboardEvent) => {
+      const isAccel = event.metaKey || event.ctrlKey;
+      if (isAccel && event.shiftKey && event.key.toLowerCase() === "o") {
+        event.preventDefault();
+        setIsProjectSwitcherOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, []);
   const monitorRuntime = useMonitorRuntime({
     enabled: isUiStateHydrated && isMonitorVisible,
   });
@@ -419,6 +435,18 @@ export const App = () => {
 
   return (
     <div className="page console-shell">
+      <button
+        type="button"
+        className="project-switcher-launch-button"
+        onClick={() => setIsProjectSwitcherOpen(true)}
+        title="Switch project (⌘⇧O)"
+      >
+        Switch project
+        <kbd>⌘⇧O</kbd>
+      </button>
+      {isProjectSwitcherOpen && (
+        <ProjectSwitcherModal onClose={() => setIsProjectSwitcherOpen(false)} />
+      )}
       {isRuntimeStatusStripVisible && (
         <RuntimeStatusStrip
           sparklinePoints={sparklinePoints}
@@ -565,15 +593,45 @@ export const App = () => {
                 await refreshColumns();
               },
               onSpawnSwarm: async (tentacleId, workspaceMode) => {
-                const response = await fetch(
-                  `/api/deck/tentacles/${encodeURIComponent(tentacleId)}/swarm`,
-                  {
+                const postSwarm = () =>
+                  fetch(`/api/deck/tentacles/${encodeURIComponent(tentacleId)}/swarm`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ workspaceMode }),
-                  },
-                );
-                if (!response.ok) return;
+                  });
+
+                let response = await postSwarm();
+                if (response.status === 409) {
+                  // Stale workers from a previous swarm. Offer to kill them
+                  // and retry — leaving them around makes the button look
+                  // broken because every subsequent click 409s.
+                  const data = (await response.json().catch(() => ({}))) as {
+                    existingSwarmIds?: string[];
+                  };
+                  const stale = data.existingSwarmIds ?? [];
+                  const proceed = window.confirm(
+                    `${stale.length} swarm worker(s) still active for this tentacle. Kill them and respawn?`,
+                  );
+                  if (!proceed) {
+                    setLoadError("Spawn swarm cancelled (existing workers were not killed).");
+                    return;
+                  }
+                  await Promise.all(
+                    stale.map((id) =>
+                      fetch(`/api/terminals/${encodeURIComponent(id)}`, { method: "DELETE" }),
+                    ),
+                  );
+                  response = await postSwarm();
+                }
+
+                if (!response.ok) {
+                  const data = (await response.json().catch(() => ({}))) as { error?: string };
+                  const reason = data.error ?? `HTTP ${response.status}`;
+                  setLoadError(`Spawn swarm failed: ${reason}`);
+                  return;
+                }
+                // Worker terminals appear via the WebSocket terminal-events
+                // feed; no explicit refresh needed.
               },
               onOctobossAction: async (action) => {
                 const response = await fetch("/api/terminals", {

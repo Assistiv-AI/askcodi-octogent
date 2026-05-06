@@ -251,6 +251,7 @@ export const createTerminalRuntime = ({
     sessions,
     resolveTerminalSession,
     getTentacleWorkspaceCwd: worktreeManager.getTentacleWorkspaceCwd,
+    getApiBaseUrl,
     isDebugPtyLogsEnabled,
     ptyLogDir,
     transcriptDirectoryPath,
@@ -290,6 +291,7 @@ export const createTerminalRuntime = ({
     persistRegistry,
     deliverChannelMessages: channelMessaging.deliverChannelMessages,
     releaseSessionKeepAlive: sessionRuntime.releaseSessionKeepAlive,
+    markAgentReady: sessionRuntime.markAgentReady,
     onStateChange: broadcastTerminalStateChanged,
   });
 
@@ -820,6 +822,7 @@ export const createTerminalRuntime = ({
     createTentacleIntegrationWorktree: worktreeManager.createTentacleIntegrationWorktree,
     removeTentacleIntegrationWorktree: worktreeManager.removeTentacleIntegrationWorktree,
     listTentacleIntegrationWorktrees: worktreeManager.listTentacleIntegrationWorktrees,
+    listRegisteredRepos: () => resolvedWorkspaceRepos.list(),
 
     async close() {
       sessionRuntime.close();

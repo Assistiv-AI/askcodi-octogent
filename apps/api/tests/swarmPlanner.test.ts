@@ -93,7 +93,7 @@ describe("planSwarm — multiple todos", () => {
       expect(worker.promptVariables.parentTerminalId).toBe("api-runtime-swarm-parent");
       expect(worker.promptVariables.parentSection).toContain("Your parent coordinator");
       expect(worker.promptVariables.parentSection).toContain(
-        `node bin/octogent channel send api-runtime-swarm-parent "DONE: ${worker.todoText}"`,
+        `node "$OCTOGENT_BIN" channel send api-runtime-swarm-parent "DONE: ${worker.todoText}"`,
       );
     }
   });
@@ -107,7 +107,7 @@ describe("planSwarm — multiple todos", () => {
       "- `api-runtime-swarm-0` — item #0: first",
     );
     expect(plan.parent?.promptVariables.workerSpawnCommands).toContain(
-      "node bin/octogent terminal create",
+      'node "$OCTOGENT_BIN" terminal create',
     );
     expect(plan.parent?.promptVariables.workerSpawnCommands).toContain(
       "--terminal-id 'api-runtime-swarm-0'",
@@ -289,7 +289,7 @@ describe("planSwarm — per-worker spawnCommand", () => {
     );
     expect(plan.workers).toHaveLength(2);
     for (const worker of plan.workers) {
-      expect(worker.spawnCommand).toContain("node bin/octogent terminal create");
+      expect(worker.spawnCommand).toContain('node "$OCTOGENT_BIN" terminal create');
       expect(worker.spawnCommand).toContain(`--terminal-id '${worker.terminalId}'`);
       expect(worker.spawnCommand).toContain('--parent-terminal-id "$OCTOGENT_SESSION_ID"');
     }

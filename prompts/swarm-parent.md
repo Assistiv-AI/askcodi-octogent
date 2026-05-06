@@ -30,14 +30,14 @@ Run each command below exactly once so every worker terminal is created under yo
 
 Do not begin monitoring or merging until all worker terminals have been created successfully.
 Do not assume the workers already exist. They do not exist until you run the spawn commands above.
-If `node bin/octogent channel send ...` returns `Target terminal not found`, that means you skipped worker creation. Stop, run the spawn commands, and verify the workers exist before doing anything else.
+If `node "$OCTOGENT_BIN" channel send ...` returns `Target terminal not found`, that means you skipped worker creation. Stop, run the spawn commands, and verify the workers exist before doing anything else.
 
 ### Required verification after spawning
 
 After running the spawn commands, verify that all worker terminals now exist before you start monitoring:
 
 ```bash
-node bin/octogent channel send <workerTerminalId> "STATUS?" --from {{terminalId}}
+node "$OCTOGENT_BIN" channel send <workerTerminalId> "STATUS?" --from {{terminalId}}
 ```
 
 If any worker still returns `Target terminal not found`, create that worker terminal before continuing.
@@ -46,12 +46,12 @@ If any worker still returns `Target terminal not found`, create that worker term
 
 Check messages from workers:
 ```bash
-node bin/octogent channel list {{terminalId}}
+node "$OCTOGENT_BIN" channel list {{terminalId}}
 ```
 
 Send a message to a worker:
 ```bash
-node bin/octogent channel send <workerTerminalId> "your message" --from {{terminalId}}
+node "$OCTOGENT_BIN" channel send <workerTerminalId> "your message" --from {{terminalId}}
 ```
 
 ### Responding to Worker States

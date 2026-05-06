@@ -289,21 +289,18 @@ export const handleDeckTentacleWorktreesRoute: ApiRouteHandler = async (
   if (!body.ok) return true;
   const payload = (body.payload ?? {}) as Record<string, unknown>;
 
-  const repoName = typeof payload.repoName === "string" ? payload.repoName.trim() : "";
+  let repoName = typeof payload.repoName === "string" ? payload.repoName.trim() : "";
   if (!repoName) {
-    writeJson(response, 400, { error: "repoName is required" }, corsOrigin);
-    return true;
+    repoName = runtime.listRegisteredRepos()[0]?.name ?? "";
   }
 
   const baseRef = typeof payload.baseRef === "string" ? payload.baseRef : undefined;
 
-  // Filesystem is the source of truth for which worktrees exist; deck metadata
-  // is the createdAt cache, written only after the worktree creation succeeds.
+  const opts: { repoName?: string; baseRef?: string } = {};
+  if (repoName !== "") opts.repoName = repoName;
+  if (baseRef !== undefined) opts.baseRef = baseRef;
   try {
-    runtime.createTentacleIntegrationWorktree(
-      tentacleId,
-      baseRef === undefined ? { repoName } : { repoName, baseRef },
-    );
+    runtime.createTentacleIntegrationWorktree(tentacleId, opts);
   } catch (error) {
     if (error instanceof RuntimeInputError) {
       writeJson(response, 400, { error: error.message }, corsOrigin);
@@ -702,15 +699,22 @@ export const handleDeckTentacleSwarmRoute: ApiRouteHandler = async (
       typeof body.repoName === "string" && body.repoName.trim().length > 0
         ? body.repoName.trim()
         : undefined;
+    // Multi-repo workspaces must disambiguate; default to the first registered
+    // repo so callers without an explicit `repoName` don't 400.
+    let resolvedRepoName = requestedRepoName;
+    if (resolvedRepoName === undefined) {
+      const repos = runtime.listRegisteredRepos();
+      if (repos.length > 1) {
+        resolvedRepoName = repos[0]?.name;
+      }
+    }
     try {
       runtime.createTentacleIntegrationWorktree(
         tentacleId,
-        requestedRepoName === undefined ? {} : { repoName: requestedRepoName },
+        resolvedRepoName === undefined ? {} : { repoName: resolvedRepoName },
       );
       integrationWorktreeCount = 1;
     } catch (error) {
-      // No repos registered → legacy fallback.
-      // Other RuntimeInputErrors (ambiguous / unknown repoName, branch exists) → 400.
       if (error instanceof NoReposRegisteredError) {
         // legacy path; integrationWorktreeCount stays 0
       } else if (error instanceof RuntimeInputError) {

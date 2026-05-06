@@ -29,6 +29,10 @@ export const createHookProcessor = (deps: {
   persistRegistry: () => void;
   deliverChannelMessages: (terminalId: string) => number;
   releaseSessionKeepAlive: (terminalId: string) => boolean;
+  /** Called on Claude Code's SessionStart hook so the runtime can fire any
+   * queued initial-input callback the moment the agent's input loop is up.
+   * Optional: PTY-data bracketed-paste detection is the fallback. */
+  markAgentReady?: (terminalId: string) => boolean;
   onStateChange?: (
     terminalId: string,
     state: TerminalSession["agentState"],
@@ -43,6 +47,7 @@ export const createHookProcessor = (deps: {
     persistRegistry,
     deliverChannelMessages,
     releaseSessionKeepAlive,
+    markAgentReady,
     onStateChange,
   } = deps;
 
@@ -214,6 +219,14 @@ export const createHookProcessor = (deps: {
     }
 
     const hookPayloadRecord = payload as Record<string, unknown>;
+
+    // Claude Code fires SessionStart once its input loop is up. Use it to
+    // unblock any queued initial-input injection so we never paste before
+    // the agent is ready.
+    if (hookName === "session-start" && octogentSessionId) {
+      markAgentReady?.(octogentSessionId);
+      return { ok: true };
+    }
 
     if (hookName === "notification") {
       if (!octogentSessionId) {

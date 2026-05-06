@@ -1,12 +1,17 @@
-## Self-orchestrate your todo list
+## Self-orchestrate this tentacle
 
-This tentacle has **{{incompleteTodoCount}} incomplete todo(s)** in `{{tentacleContextPath}}/todo.md`. You can either work through them sequentially yourself, or self-spawn a swarm of worker terminals so the work parallelizes.
+You are an orchestrator, not a worker. This tentacle has **{{incompleteTodoCount}} incomplete todo(s)** in `{{tentacleContextPath}}/todo.md`.
 
-**Use your judgment.** A single small todo is usually faster done directly. Three or more independent todos benefit from a swarm. Tightly coupled todos that touch the same files are better serialized.
+**Hard rule: do NOT do the work yourself in this terminal.** Your job is to spawn workers, watch them, merge their output, and update the docs. Workers write the code. You coordinate.
 
-### How to self-spawn workers
+If you find yourself reaching for `Write`, `Edit`, or `Bash` to modify project files (other than the integration worktree merge step at the end), stop and spawn a worker instead. Even single-todo tentacles spawn one worker.
 
-You are the parent. You don't need a separate parent terminal — workers report DONE back to you, and the swarm-completion flow (review → merge → cleanup) is your job.
+The only files you may edit directly are:
+- `{{tentacleContextPath}}/todo.md` (mark items done)
+- `{{tentacleContextPath}}/CONTEXT.md` (update assumptions after merge)
+- The integration worktree itself, but only via `git merge` (Step 5)
+
+### Workflow
 
 **Step 1: Ensure an integration worktree exists** for this tentacle. The worktree gives workers a stable base branch (`octogent/{{tentacleId}}`) to anchor on. Single-repo workspaces let the server pick the repo automatically:
 
@@ -16,7 +21,7 @@ curl -s -X POST http://localhost:{{apiPort}}/api/deck/tentacles/{{tentacleId}}/w
   -d '{}'
 ```
 
-If the workspace has multiple registered repos, the server returns 400 — pass the explicit `repoName` in the body. If an integration worktree already exists, the call returns 400 with "already exists"; that is fine, proceed.
+In multi-repo workspaces with no explicit `repoName` body field, the server auto-picks the first registered repo. If an integration worktree already exists, the call returns 400 with "already exists" — that is fine, proceed.
 
 **Step 2: Get a worker plan from the swarm planner.** Read-only:
 
@@ -37,6 +42,8 @@ echo "$PLAN" | jq -r '.workers[].spawnCommand' | while read -r cmd; do
 done
 ```
 
+The server caps at 9 concurrent workers per parent. If the planner returns more than 9 todos, it batches the rest — spawn the first batch, wait for DONE, then spawn the next.
+
 **Step 4: Wait for DONE messages.** Workers report completion via channel messages with `type=DONE`. The runtime auto-cleans each worker's worktree on DONE. You receive each DONE in your channel queue — review what changed.
 
 **Step 5: Merge into the tentacle integration branch.** Once all workers report DONE:
@@ -54,14 +61,13 @@ git for-each-ref --format='%(refname:short)' "refs/heads/octogent/{{tentacleId}}
 
 **Step 6: Update tentacle docs.** Mark completed items as `- [x]` in `{{tentacleContextPath}}/todo.md`. Update `{{tentacleContextPath}}/CONTEXT.md` if the merged work changed assumptions documented there.
 
-### When NOT to swarm
+### Same-file todos are still spawned as workers
 
-- Single todo: just do it.
-- Todos that all touch the same one or two files: serialize, swarms create merge conflicts.
-- Exploratory or undefined work: serialize, scope the work first.
+Worktree mode gives each worker its own copy of the repo — they never block each other while running. Conflicts only show up at the merge step (Step 5), and `git merge` is good at it. Don't bail on the swarm because "they touch the same file." Spawn the workers, let them work in parallel worktrees, resolve conflicts in the parent at merge time.
 
 ### Ground rules
 
-- Do not create more than 9 workers (server cap).
+- Do not create more than 9 workers in one batch (server cap).
 - Do not edit `.octogent/state/*` directly — the runtime owns it.
 - Do not delete worker terminals manually before they DONE. Auto-cleanup fires on DONE.
+- Do not write project code in this terminal. Spawn a worker.

@@ -33,6 +33,12 @@ import {
   handleDeckVaultFileRoute,
 } from "./deckRoutes";
 import { handleTentacleGitPullRequestRoute, handleTentacleGitRoute } from "./gitRoutes";
+import { handleLauncherInfoRoute } from "./launcherInfoRoute";
+import {
+  handleLauncherProjectItemRoute,
+  handleLauncherProjectOpenRoute,
+  handleLauncherProjectsCollectionRoute,
+} from "./launcherProjectsRoutes";
 import {
   handleChannelMessagesRoute,
   handleHookRoute,
@@ -134,6 +140,15 @@ const API_ROUTE_MAP: ReadonlyMap<string, readonly ApiRouteHandler[]> = new Map([
   ],
   ["swarm-plans", [handleSwarmPlanPreviewRoute]],
   ["octoboss", [handleOctobossRouteRoute]],
+  [
+    "launcher",
+    [
+      handleLauncherInfoRoute,
+      handleLauncherProjectOpenRoute,
+      handleLauncherProjectItemRoute,
+      handleLauncherProjectsCollectionRoute,
+    ],
+  ],
   ["terminal-snapshots", [handleTerminalSnapshotsRoute]],
   ["codex", [handleCodexUsageRoute]],
   ["claude", [handleClaudeUsageRoute]],
