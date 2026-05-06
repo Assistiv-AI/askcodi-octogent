@@ -60,7 +60,7 @@ const assertSafePathSegment = (label: string, value: string): void => {
 };
 
 /** Resolve the effective worktree identifier for a terminal. */
-const getEffectiveWorktreeId = (terminal: PersistedTerminal): string =>
+export const getEffectiveWorktreeId = (terminal: PersistedTerminal): string =>
   terminal.worktreeId ?? terminal.tentacleId;
 
 /** Find any terminal whose effective worktree identifier matches. */

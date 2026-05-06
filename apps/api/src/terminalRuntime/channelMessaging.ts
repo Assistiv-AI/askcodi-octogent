@@ -7,8 +7,12 @@ export const createChannelMessaging = (deps: {
   terminals: Map<string, PersistedTerminal>;
   sessions: Map<string, TerminalSession>;
   writeInput: (terminalId: string, data: string) => boolean;
+  /** Fires after a typed DONE channel message is queued. Receives the sender's
+   * persisted record. The hook decides whether/how to act (e.g. swarm-worker
+   * cleanup); channelMessaging stays neutral on worker semantics. */
+  onDoneMessageSent?: (sender: PersistedTerminal) => void;
 }) => {
-  const { terminals, sessions, writeInput } = deps;
+  const { terminals, sessions, writeInput, onDoneMessageSent } = deps;
   const channelQueues = new Map<string, ChannelMessage[]>();
   let channelMessageCounter = 0;
 
@@ -85,6 +89,19 @@ export const createChannelMessaging = (deps: {
       const targetSession = sessions.get(toTerminalId);
       if (targetSession && targetSession.agentState === "idle") {
         deliverChannelMessages(toTerminalId);
+      }
+
+      if (type === "DONE" && onDoneMessageSent) {
+        const sender = terminals.get(fromTerminalId);
+        if (sender) {
+          try {
+            onDoneMessageSent(sender);
+          } catch {
+            // Hook errors must not poison message-send semantics. The message
+            // is already queued and (potentially) delivered; subsequent failures
+            // in side-effect cleanup should be the hook's responsibility to log.
+          }
+        }
       }
 
       return message;

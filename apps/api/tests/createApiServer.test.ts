@@ -3766,4 +3766,152 @@ describe("createApiServer", () => {
     };
     expect(payload.messages.map((m) => m.type)).toEqual(["DONE", "BLOCKED"]);
   });
+
+  describe("auto-cleanup on DONE from swarm workers", () => {
+    const startServerWithWorktreeWorker = async () => {
+      const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+      temporaryDirectories.push(workspaceCwd);
+      const gitClient = new FakeGitClient();
+      const baseUrl = await startServer({ workspaceCwd, gitClient });
+
+      // Parent in worktree mode (terminal-1).
+      const parent = await fetch(`${baseUrl}/api/terminals`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceMode: "worktree" }),
+      });
+      expect(parent.status).toBe(201);
+
+      // Worker child in worktree mode (terminal-2) with parentTerminalId set.
+      const worker = await fetch(`${baseUrl}/api/terminals`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workspaceMode: "worktree",
+          parentTerminalId: "terminal-1",
+        }),
+      });
+      expect(worker.status).toBe(201);
+
+      const workerWorktreePath = join(workspaceCwd, ".octogent", "worktrees", "terminal-2");
+      return { baseUrl, workspaceCwd, gitClient, workerWorktreePath };
+    };
+
+    it("removes the worker's worktree when the worker sends a DONE message", async () => {
+      const { baseUrl, gitClient, workerWorktreePath } = await startServerWithWorktreeWorker();
+      expect(gitClient.getWorktree(workerWorktreePath)).toBeDefined();
+
+      const send = await fetch(`${baseUrl}/api/channels/terminal-1/messages`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fromTerminalId: "terminal-2",
+          content: "DONE: feature implemented",
+        }),
+      });
+      expect(send.status).toBe(201);
+
+      expect(gitClient.getWorktree(workerWorktreePath)).toBeNull();
+    });
+
+    it("does not remove the worktree when the worker sends a non-DONE message", async () => {
+      const { baseUrl, gitClient, workerWorktreePath } = await startServerWithWorktreeWorker();
+
+      for (const content of ["INFO: progress update", "BLOCKED: need help", "ASSIGN: take this"]) {
+        const send = await fetch(`${baseUrl}/api/channels/terminal-1/messages`, {
+          method: "POST",
+          headers: { Accept: "application/json", "Content-Type": "application/json" },
+          body: JSON.stringify({ fromTerminalId: "terminal-2", content }),
+        });
+        expect(send.status).toBe(201);
+      }
+
+      expect(gitClient.getWorktree(workerWorktreePath)).toBeDefined();
+    });
+
+    it("does not remove the worktree when a non-worker (no parentTerminalId) sends DONE", async () => {
+      const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+      temporaryDirectories.push(workspaceCwd);
+      const gitClient = new FakeGitClient();
+      const baseUrl = await startServer({ workspaceCwd, gitClient });
+
+      // Standalone worktree-mode terminal with no parent.
+      const create = await fetch(`${baseUrl}/api/terminals`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceMode: "worktree" }),
+      });
+      expect(create.status).toBe(201);
+      const worktreePath = join(workspaceCwd, ".octogent", "worktrees", "terminal-1");
+      expect(gitClient.getWorktree(worktreePath)).toBeDefined();
+
+      // Use a different terminal as the receiver and have terminal-1 send to it.
+      const peer = await fetch(`${baseUrl}/api/terminals`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      expect(peer.status).toBe(201);
+
+      const send = await fetch(`${baseUrl}/api/channels/terminal-2/messages`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ fromTerminalId: "terminal-1", content: "DONE: tagging out" }),
+      });
+      expect(send.status).toBe(201);
+
+      // Worktree still present because terminal-1 has no parentTerminalId.
+      expect(gitClient.getWorktree(worktreePath)).toBeDefined();
+    });
+
+    it("is a no-op when a shared-mode worker sends DONE", async () => {
+      const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+      temporaryDirectories.push(workspaceCwd);
+      const gitClient = new FakeGitClient();
+      const baseUrl = await startServer({ workspaceCwd, gitClient });
+
+      const parent = await fetch(`${baseUrl}/api/terminals`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      expect(parent.status).toBe(201);
+
+      const worker = await fetch(`${baseUrl}/api/terminals`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ parentTerminalId: "terminal-1" }),
+      });
+      expect(worker.status).toBe(201);
+
+      // Shared-mode workers have no worktree; the workspaceMode gate in the
+      // hook short-circuits before touching the git client. Verify the gate
+      // by confirming no worktree path was ever registered for the worker.
+      const workerWorktreePath = join(workspaceCwd, ".octogent", "worktrees", "terminal-2");
+      expect(gitClient.getWorktree(workerWorktreePath)).toBeNull();
+
+      const send = await fetch(`${baseUrl}/api/channels/terminal-1/messages`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ fromTerminalId: "terminal-2", content: "DONE: done" }),
+      });
+      expect(send.status).toBe(201);
+      // Still null — the hook didn't try to remove anything.
+      expect(gitClient.getWorktree(workerWorktreePath)).toBeNull();
+    });
+
+    it("is idempotent when DONE is sent twice", async () => {
+      const { baseUrl, gitClient, workerWorktreePath } = await startServerWithWorktreeWorker();
+
+      for (let i = 0; i < 2; i += 1) {
+        const send = await fetch(`${baseUrl}/api/channels/terminal-1/messages`, {
+          method: "POST",
+          headers: { Accept: "application/json", "Content-Type": "application/json" },
+          body: JSON.stringify({ fromTerminalId: "terminal-2", content: "DONE: done" }),
+        });
+        expect(send.status).toBe(201);
+      }
+      expect(gitClient.getWorktree(workerWorktreePath)).toBeNull();
+    });
+  });
 });

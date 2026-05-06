@@ -44,7 +44,7 @@ import {
   type TerminalSessionEndDetails,
   type TerminalSessionStartDetails,
 } from "./terminalRuntime/types";
-import { createWorktreeManager } from "./terminalRuntime/worktreeManager";
+import { createWorktreeManager, getEffectiveWorktreeId } from "./terminalRuntime/worktreeManager";
 import { type WorkspaceRepos, createWorkspaceRepos } from "./workspace/repos";
 
 export type {
@@ -270,6 +270,16 @@ export const createTerminalRuntime = ({
     terminals,
     sessions,
     writeInput: (terminalId: string, data: string) => sessionRuntime.writeInput(terminalId, data),
+    // Auto-clean a swarm worker's worktree when it reports DONE. Gated on
+    // worker (parentTerminalId set) AND worktree-mode; shared-mode workers
+    // have nothing to clean.
+    onDoneMessageSent: (sender) => {
+      if (sender.parentTerminalId === undefined) return;
+      if (sender.workspaceMode !== "worktree") return;
+      worktreeManager.removeTentacleWorktree(getEffectiveWorktreeId(sender), {
+        bestEffort: true,
+      });
+    },
   });
 
   const hookProcessor = createHookProcessor({

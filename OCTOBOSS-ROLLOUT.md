@@ -96,6 +96,22 @@ Tests: 10 new in `apps/api/tests/createApiServer.test.ts` (89 → was 79).
 
 **Verification:** 239 api tests (229 + 10), 14 core tests, biome clean, tsc --noEmit clean, full build clean.
 
+### PR4.5 Task 3 — Auto-cleanup on DONE
+
+Files: `apps/api/src/terminalRuntime/channelMessaging.ts`, `apps/api/src/terminalRuntime/worktreeManager.ts`, `apps/api/src/terminalRuntime.ts`.
+Tests: 5 new in `apps/api/tests/createApiServer.test.ts` (244 total, was 239).
+
+- `createChannelMessaging` gains `onDoneMessageSent?: (sender: PersistedTerminal) => void` callback. Fires after a typed DONE message is queued; the hook decides whether/how to act.
+- channelMessaging stays neutral on worker semantics: hook receives the sender's persisted record; the impl in `terminalRuntime.ts` gates on `parentTerminalId !== undefined` (is swarm worker?) and `workspaceMode === "worktree"` (has worktree to clean).
+- Hook errors are caught inside `sendChannelMessage` so cleanup failures cannot poison message-send semantics.
+- `getEffectiveWorktreeId(terminal)` exported from `worktreeManager.ts` (was module-private). New code uses it; pre-existing duplicates left for a follow-up.
+
+**Verification:** 244 api tests (239 + 5), 14 core tests, biome clean, tsc --noEmit clean, full build clean.
+
+**Deferred follow-ups (out of scope for Task 3):**
+- Defer the `removeTentacleWorktree` git op via `queueMicrotask` so the channel POST returns faster on real workspaces (multi-ms git child-process today)
+- Migrate the 4 pre-existing `worktreeId ?? tentacleId` call sites to `getEffectiveWorktreeId`
+
 ---
 
 ## Remaining work
