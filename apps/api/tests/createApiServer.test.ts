@@ -4064,6 +4064,157 @@ describe("createApiServer", () => {
     });
   });
 
+  describe("tentacle self-orchestrator prompt", () => {
+    const seedTentacleWithProgress = (workspaceCwd: string, name: string, todoLines: string) => {
+      mkdirSync(join(workspaceCwd, ".octogent", "tentacles", name), { recursive: true });
+      writeFileSync(
+        join(workspaceCwd, ".octogent", "tentacles", name, "CONTEXT.md"),
+        `# ${name}\n\nA tentacle.\n`,
+        "utf8",
+      );
+      writeFileSync(
+        join(workspaceCwd, ".octogent", "tentacles", name, "todo.md"),
+        `# Todo\n\n${todoLines}\n`,
+        "utf8",
+      );
+    };
+
+    it("appends the orchestrator section when the tentacle has incomplete todos", async () => {
+      const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+      temporaryDirectories.push(workspaceCwd);
+      seedTentacleWithProgress(
+        workspaceCwd,
+        "docs",
+        "- [ ] First task\n- [ ] Second task\n- [x] Already done",
+      );
+      const promptsDir = join(process.cwd(), "..", "..", "prompts");
+      const baseUrl = await startServer({ workspaceCwd, promptsDir });
+
+      const createResponse = await fetch(`${baseUrl}/api/terminals`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ tentacleId: "docs", workspaceMode: "shared" }),
+      });
+      expect(createResponse.status).toBe(201);
+
+      const registry = await waitForRegistryDocument<{
+        terminals: Array<{ terminalId: string; initialInputDraft?: string }>;
+      }>(workspaceCwd, (doc) =>
+        doc.terminals.some(
+          (t) =>
+            t.terminalId === "terminal-1" &&
+            typeof t.initialInputDraft === "string" &&
+            t.initialInputDraft.includes("Self-orchestrate"),
+        ),
+      );
+      const terminal = registry.terminals.find((t) => t.terminalId === "terminal-1");
+      // Context-init line is still present.
+      expect(terminal?.initialInputDraft).toContain("You are working on");
+      // Orchestrator section is appended.
+      expect(terminal?.initialInputDraft).toContain("2 incomplete todo");
+      expect(terminal?.initialInputDraft).toContain("/api/swarm-plans");
+      expect(terminal?.initialInputDraft).toMatch(/tentacleId.*docs/);
+      // Workers spawn with the parent id resolved at runtime via the env var.
+      expect(terminal?.initialInputDraft).toContain("$OCTOGENT_SESSION_ID");
+    });
+
+    it("omits the orchestrator section when the tentacle has zero incomplete todos", async () => {
+      const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+      temporaryDirectories.push(workspaceCwd);
+      seedTentacleWithProgress(workspaceCwd, "docs", "- [x] All done");
+      const promptsDir = join(process.cwd(), "..", "..", "prompts");
+      const baseUrl = await startServer({ workspaceCwd, promptsDir });
+
+      const createResponse = await fetch(`${baseUrl}/api/terminals`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ tentacleId: "docs", workspaceMode: "shared" }),
+      });
+      expect(createResponse.status).toBe(201);
+
+      const registry = await waitForRegistryDocument<{
+        terminals: Array<{ terminalId: string; initialInputDraft?: string }>;
+      }>(workspaceCwd, (doc) =>
+        doc.terminals.some(
+          (t) => t.terminalId === "terminal-1" && typeof t.initialInputDraft === "string",
+        ),
+      );
+      const terminal = registry.terminals.find((t) => t.terminalId === "terminal-1");
+      expect(terminal?.initialInputDraft).toContain("You are working on");
+      expect(terminal?.initialInputDraft).not.toContain("Self-orchestrate");
+    });
+
+    it("does not append the orchestrator for worker terminals (parentTerminalId set)", async () => {
+      const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+      temporaryDirectories.push(workspaceCwd);
+      seedTentacleWithProgress(workspaceCwd, "docs", "- [ ] One\n- [ ] Two");
+      const promptsDir = join(process.cwd(), "..", "..", "prompts");
+      const baseUrl = await startServer({ workspaceCwd, promptsDir });
+
+      // Spawn a parent tentacle terminal first.
+      const parentResponse = await fetch(`${baseUrl}/api/terminals`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ tentacleId: "docs", workspaceMode: "shared" }),
+      });
+      expect(parentResponse.status).toBe(201);
+
+      // Now spawn a child worker on the same tentacle.
+      const workerResponse = await fetch(`${baseUrl}/api/terminals`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tentacleId: "docs",
+          workspaceMode: "shared",
+          parentTerminalId: "terminal-1",
+        }),
+      });
+      expect(workerResponse.status).toBe(201);
+
+      const registry = await waitForRegistryDocument<{
+        terminals: Array<{
+          terminalId: string;
+          parentTerminalId?: string;
+          initialInputDraft?: string;
+        }>;
+      }>(workspaceCwd, (doc) => doc.terminals.some((t) => t.terminalId === "terminal-2"));
+      const worker = registry.terminals.find((t) => t.terminalId === "terminal-2");
+      expect(worker?.parentTerminalId).toBe("terminal-1");
+      // Worker has no auto-prompt.
+      expect(worker?.initialInputDraft).toBeUndefined();
+    });
+
+    it("respects an explicit initialPrompt and skips the auto-prompt entirely", async () => {
+      const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+      temporaryDirectories.push(workspaceCwd);
+      seedTentacleWithProgress(workspaceCwd, "docs", "- [ ] One\n- [ ] Two");
+      const promptsDir = join(process.cwd(), "..", "..", "prompts");
+      const baseUrl = await startServer({ workspaceCwd, promptsDir });
+
+      const createResponse = await fetch(`${baseUrl}/api/terminals`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tentacleId: "docs",
+          workspaceMode: "shared",
+          initialPrompt: "Just do thing X.",
+        }),
+      });
+      expect(createResponse.status).toBe(201);
+
+      const registry = await waitForRegistryDocument<{
+        terminals: Array<{
+          terminalId: string;
+          initialPrompt?: string;
+          initialInputDraft?: string;
+        }>;
+      }>(workspaceCwd, (doc) => doc.terminals.some((t) => t.terminalId === "terminal-1"));
+      const terminal = registry.terminals.find((t) => t.terminalId === "terminal-1");
+      expect(terminal?.initialPrompt).toBe("Just do thing X.");
+      expect(terminal?.initialInputDraft).toBeUndefined();
+    });
+  });
+
   describe("octoboss router endpoint", () => {
     const seedTentacle = (workspaceCwd: string, name: string, description: string) => {
       mkdirSync(join(workspaceCwd, ".octogent", "tentacles", name), { recursive: true });

@@ -22,25 +22,43 @@ import {
   parseTerminalWorkspaceMode,
 } from "./terminalParsers";
 
-const buildTentacleInitialPrompt = (
+const buildTentacleInitialPrompt = async (
   promptsDir: string,
   workspaceCwd: string,
   projectStateDir: string,
   tentacleId: string,
+  apiPort: string,
 ): Promise<string | undefined> => {
   const tentacle = readDeckTentacles(workspaceCwd, projectStateDir).find(
     (entry) => entry.tentacleId === tentacleId,
   );
-  if (!tentacle) {
-    return Promise.resolve(undefined);
-  }
+  if (!tentacle) return undefined;
 
   const tentacleFolderPath = join(TENTACLES_RELATIVE_PATH, tentacleId);
-  return resolvePrompt(promptsDir, "tentacle-context-init", {
+  const baseVariables = {
     tentacleName: tentacle.displayName,
     tentacleId,
     tentacleContextPath: tentacleFolderPath,
+  };
+
+  const contextPrompt = await resolvePrompt(promptsDir, "tentacle-context-init", baseVariables);
+  if (!contextPrompt) return undefined;
+
+  // Append the self-orchestrator section when there are incomplete todos so
+  // the tentacle agent knows it can self-spawn workers without a human in
+  // the loop. Worker terminals don't go through this code path (their
+  // `initialPrompt` is the swarm-worker template, set by the swarm route).
+  const incompleteTodoCount = tentacle.todoTotal - tentacle.todoDone;
+  if (incompleteTodoCount <= 0) return contextPrompt;
+
+  const orchestratorPrompt = await resolvePrompt(promptsDir, "tentacle-orchestrator", {
+    ...baseVariables,
+    apiPort,
+    incompleteTodoCount: String(incompleteTodoCount),
   });
+  if (!orchestratorPrompt) return contextPrompt;
+
+  return `${contextPrompt}\n\n${orchestratorPrompt}`;
 };
 
 export const handleTerminalSnapshotsRoute: ApiRouteHandler = async (
@@ -245,12 +263,20 @@ export const handleTerminalsCollectionRoute: ApiRouteHandler = async (
       createTerminalInput.initialPrompt = bodyPayload.initialPrompt.trim();
     }
 
-    if (!createTerminalInput.initialPrompt && createTerminalInput.tentacleId) {
+    // Skip the default tentacle prompt for worker terminals (they have an
+    // explicit prompt template) and for terminals already given an initial
+    // prompt via the request body.
+    if (
+      !createTerminalInput.initialPrompt &&
+      createTerminalInput.tentacleId &&
+      !createTerminalInput.parentTerminalId
+    ) {
       const defaultTentaclePrompt = await buildTentacleInitialPrompt(
         promptsDir,
         workspaceCwd,
         projectStateDir,
         createTerminalInput.tentacleId,
+        getApiPort(),
       );
       if (defaultTentaclePrompt) {
         createTerminalInput.initialInputDraft = defaultTentaclePrompt;

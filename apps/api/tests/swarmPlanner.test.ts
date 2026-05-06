@@ -277,6 +277,39 @@ describe("planSwarm — tentacle integration branch naming", () => {
   });
 });
 
+describe("planSwarm — per-worker spawnCommand", () => {
+  it("emits a runnable spawn command per worker that uses $OCTOGENT_SESSION_ID for the parent", () => {
+    const plan = planSwarm(
+      baseInput({
+        todos: [
+          { index: 0, text: "a" },
+          { index: 1, text: "b" },
+        ],
+      }),
+    );
+    expect(plan.workers).toHaveLength(2);
+    for (const worker of plan.workers) {
+      expect(worker.spawnCommand).toContain("node bin/octogent terminal create");
+      expect(worker.spawnCommand).toContain(`--terminal-id '${worker.terminalId}'`);
+      expect(worker.spawnCommand).toContain('--parent-terminal-id "$OCTOGENT_SESSION_ID"');
+    }
+  });
+
+  it("parent's workerSpawnCommands block is derived from per-worker spawnCommand", () => {
+    const plan = planSwarm(
+      baseInput({
+        todos: [
+          { index: 0, text: "a" },
+          { index: 1, text: "b" },
+        ],
+      }),
+    );
+    for (const worker of plan.workers) {
+      expect(plan.parent?.promptVariables.workerSpawnCommands).toContain(worker.spawnCommand);
+    }
+  });
+});
+
 describe("planSwarm — apiPort handling", () => {
   it("accepts apiPort as a number and stringifies for prompt variables", () => {
     const plan = planSwarm(

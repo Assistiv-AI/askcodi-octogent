@@ -42,6 +42,12 @@ export type SwarmWorkerSpec = {
   promptVariables: Record<string, string>;
   tentacleName: string;
   autoRenamePromptContext: string;
+  /** Ready-to-execute `node bin/octogent terminal create …` command that
+   * spawns this worker. Self-orchestrating tentacle agents (PR5 Task 6)
+   * execute this directly so they don't have to re-derive the flag shape;
+   * the human-triggered swarm parent prompt embeds it via
+   * `parent.promptVariables.workerSpawnCommands`. Single source of truth. */
+  spawnCommand: string;
 };
 
 export type SwarmParentSpec = {
@@ -258,7 +264,6 @@ const buildWorkerPromptVariables = ({
 const buildWorkerSpawnCommand = ({
   workerTerminalId,
   tentacleId,
-  parentTerminalId,
   tentacleName,
   todoText,
   workspaceMode,
@@ -268,7 +273,6 @@ const buildWorkerSpawnCommand = ({
 }: {
   workerTerminalId: string;
   tentacleId: string;
-  parentTerminalId: string;
   tentacleName: string;
   todoText: string;
   workspaceMode: TentacleWorkspaceMode;
@@ -277,11 +281,15 @@ const buildWorkerSpawnCommand = ({
   baseRef?: string;
 }): string => {
   const variablesJson = JSON.stringify(promptVariables);
+  // Parent terminal id resolves at execution time via the PTY env var the
+  // runtime sets per session. This works for both the human-triggered swarm
+  // parent and a self-spawning tentacle agent — neither needs to know the
+  // literal id at planning time.
   const commandParts = [
     "node bin/octogent terminal create",
     `--terminal-id ${shellSingleQuote(workerTerminalId)}`,
     `--tentacle-id ${shellSingleQuote(tentacleId)}`,
-    `--parent-terminal-id ${shellSingleQuote(parentTerminalId)}`,
+    '--parent-terminal-id "$OCTOGENT_SESSION_ID"',
     `--workspace-mode ${workspaceMode}`,
     `--name ${shellSingleQuote(tentacleName)}`,
     "--name-origin generated",
@@ -373,6 +381,16 @@ export const planSwarm = (input: SwarmPlanInput): SwarmPlan => {
       parentTerminalId,
       branchName,
     });
+    const spawnCommand = buildWorkerSpawnCommand({
+      workerTerminalId,
+      tentacleId,
+      tentacleName,
+      todoText: todo.text,
+      workspaceMode: workerWorkspaceMode,
+      promptVariables,
+      ...(branchName ? { branchName } : {}),
+      ...(workerWorkspaceMode === "worktree" && baseRef ? { baseRef } : {}),
+    });
     return {
       terminalId: workerTerminalId,
       todoIndex: todo.index,
@@ -386,6 +404,7 @@ export const planSwarm = (input: SwarmPlanInput): SwarmPlan => {
       promptVariables,
       tentacleName,
       autoRenamePromptContext: todo.text,
+      spawnCommand,
     };
   });
 
@@ -406,20 +425,7 @@ export const planSwarm = (input: SwarmPlanInput): SwarmPlan => {
     .join("\n");
 
   const workerSpawnCommands = workers
-    .map((w) => {
-      const command = buildWorkerSpawnCommand({
-        workerTerminalId: w.terminalId,
-        tentacleId,
-        parentTerminalId,
-        tentacleName,
-        todoText: w.todoText,
-        workspaceMode: workerWorkspaceMode,
-        promptVariables: w.promptVariables,
-        ...(w.branchName ? { branchName: w.branchName } : {}),
-        ...(w.baseRef ? { baseRef: w.baseRef } : {}),
-      });
-      return `- \`${w.terminalId}\`:\n  \`\`\`bash\n  ${command}\n  \`\`\``;
-    })
+    .map((w) => `- \`${w.terminalId}\`:\n  \`\`\`bash\n  ${w.spawnCommand}\n  \`\`\``)
     .join("\n");
 
   const parent: SwarmParentSpec = {
