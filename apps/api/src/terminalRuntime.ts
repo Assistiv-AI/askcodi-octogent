@@ -795,6 +795,10 @@ export const createTerminalRuntime = ({
       return sessionRuntime.resizeSession(terminalId, cols, rows);
     },
 
+    createTentacleIntegrationWorktree: worktreeManager.createTentacleIntegrationWorktree,
+    removeTentacleIntegrationWorktree: worktreeManager.removeTentacleIntegrationWorktree,
+    listTentacleIntegrationWorktrees: worktreeManager.listTentacleIntegrationWorktrees,
+
     async close() {
       sessionRuntime.close();
       await registryPersistence.close();

@@ -65,6 +65,21 @@ Files: `apps/api/src/terminalRuntime/worktreeManager.ts`, `apps/api/src/terminal
 
 **Verification across all done work:** 212 api tests, 14 core tests, full build clean. The `reports file-backed workspace setup status` test still passes, which means the new runtime no longer eagerly creates `.octogent/` on construction.
 
+### PR4.5 Task 1 — Tentacle integration worktree path scheme
+
+Files: `apps/api/src/terminalRuntime/constants.ts`, `apps/api/src/terminalRuntime/worktreeManager.ts`, `apps/api/src/terminalRuntime.ts`, `apps/api/src/createApiServer/deckRoutes.ts`, `apps/api/src/swarmPlanner/inputs.ts`, `apps/api/src/swarmPlanner/index.ts`, `apps/api/src/deck/readDeckTentacles.ts`.
+Tests: `apps/api/tests/tentacleIntegrationWorktree.test.ts` (17).
+
+- New constants: `TENTACLES_RELATIVE_PATH = ".octogent/tentacles"`, `TENTACLE_INTEGRATION_WORKTREES_SUBDIR = "worktrees"`. All inline `.octogent/tentacles` strings replaced with the constant.
+- `worktreeManager` gains three methods on top of the per-terminal API: `createTentacleIntegrationWorktree(tentacleId, {repoName?, baseRef?})`, `removeTentacleIntegrationWorktree(tentacleId, {repoName?, bestEffort?})`, `listTentacleIntegrationWorktrees(tentacleId)`. Path: `<workspaceCwd>/.octogent/tentacles/<tentacleId>/worktrees/<repoName>/`. Branch: `octogent/<tentacleId>` per repo.
+- `assertSafePathSegment` rejects `..`, `/`, `\` in `tentacleId` and `repoName`.
+- Single-repo workspaces resolve `repoName` automatically (basename). Multi-repo with no name throws `RuntimeInputError`.
+- New methods exposed on the runtime API surface (`runtime.{create,remove,list}TentacleIntegrationWorktree(s)`).
+- `handleDeckTentacleItemRoute` (DELETE) now tears down integration worktrees with `bestEffort: true` before `deleteDeckTentacle` does its `rmSync`, preventing leaked git worktree refs.
+- `removeTentacleIntegrationWorktree` is idempotent (no-op when path missing, branch removal still attempted).
+
+**Verification:** 229 api tests (212 + 17 new), 14 core tests, biome clean (99 files), tsc --noEmit clean, full build clean.
+
 ---
 
 ## Remaining work
@@ -73,14 +88,9 @@ Files: `apps/api/src/terminalRuntime/worktreeManager.ts`, `apps/api/src/terminal
 
 This is the user-visible "tentacles own worktrees" model.
 
-#### Task 1: Tentacle integration worktree path scheme
-**What:** Add a parallel API on `worktreeManager` for tentacle-scoped worktrees living at `<workspaceCwd>/.octogent/tentacles/<tentacleId>/worktrees/<repoName>/` on branch `octogent/<tentacleId>`. New methods alongside the existing per-terminal ones.
-**Where to start:** `apps/api/src/terminalRuntime/worktreeManager.ts`. New: `createTentacleIntegrationWorktree({tentacleId, repoName, baseRef})`, `removeTentacleIntegrationWorktree({tentacleId, repoName})`, `listTentacleIntegrationWorktrees(tentacleId)`. New constant in `constants.ts` for the relative path `.octogent/tentacles`. Tests in a new `apps/api/tests/tentacleIntegrationWorktree.test.ts`.
-**Why parallel API and not a path-scheme rewrite:** Existing terminals on disk reference `.octogent/worktrees/<terminalId>/` and would break if we changed the scheme. New concept coexists; the swarm flip in Task 4 wires workers to use the new scheme.
-
 #### Task 2: Tentacle config records which repos it owns worktrees for
 **What:** Extend the tentacle metadata so a tentacle can declare which repos it has integration worktrees in. Used by the swarm route, the deletion path, and the UI.
-**Where to start:** `apps/api/src/deck/readDeckTentacles.ts` (search for `DeckTentacle` shape). Add `worktrees?: Array<{repoName: string; createdAt: string}>`. Persist via the existing deck mechanism. Add API: `POST /api/deck/tentacles/<id>/worktrees {repoName}` and `DELETE /api/deck/tentacles/<id>/worktrees/<repoName>`. Each calls into the worktreeManager methods from Task 1.
+**Where to start:** `apps/api/src/deck/readDeckTentacles.ts` (search for `DeckTentacle` shape). Add `worktrees?: Array<{repoName: string; createdAt: string}>`. Persist via the existing deck mechanism. Add API: `POST /api/deck/tentacles/<id>/worktrees {repoName}` and `DELETE /api/deck/tentacles/<id>/worktrees/<repoName>`. Each calls `runtime.createTentacleIntegrationWorktree` / `runtime.removeTentacleIntegrationWorktree` from Task 1. The deck deletion route already calls `removeTentacleIntegrationWorktree(bestEffort: true)` for every entry from `listTentacleIntegrationWorktrees(tentacleId)` — Task 2's persisted metadata can reuse that pattern when worktrees go stale.
 
 #### Task 3: Auto-cleanup on DONE
 **What:** When a worker terminal sends a `type === "DONE"` channel message and the terminal is a swarm worker (i.e. its `parentTerminalId` is set), clean up the worker's worktree and branch.

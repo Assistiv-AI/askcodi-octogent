@@ -1,3 +1,4 @@
+import { TENTACLES_RELATIVE_PATH } from "../terminalRuntime/constants";
 import type { TentacleWorkspaceMode } from "../terminalRuntime/types";
 
 export type SwarmTodoItem = {
@@ -142,7 +143,7 @@ const buildCompletionStrategySection = (
         "",
         "5. **If tests fail**, investigate and fix before merging. Do not merge broken code.",
         "",
-        `6. **Update tentacle state/docs** before finalizing. Mark completed items as done in \`.octogent/tentacles/${tentacleId}/todo.md\`, and update \`.octogent/tentacles/${tentacleId}/CONTEXT.md\` or other tentacle markdown files if the merged work changed the reality they describe.`,
+        `6. **Update tentacle state/docs** before finalizing. Mark completed items as done in \`${TENTACLES_RELATIVE_PATH}/${tentacleId}/todo.md\`, and update \`${TENTACLES_RELATIVE_PATH}/${tentacleId}/CONTEXT.md\` or other tentacle markdown files if the merged work changed the reality they describe.`,
         "",
         "7. **Clean up** the integration branch:",
         "   ```bash",
@@ -168,7 +169,7 @@ const buildCompletionStrategySection = (
         "",
         "4. **If tests fail**, investigate and coordinate fixes. Do not declare the swarm complete while the workspace is broken.",
         "",
-        `5. **Update tentacle state/docs** before asking for approval. Mark completed items as done in \`.octogent/tentacles/${tentacleId}/todo.md\`, and update \`.octogent/tentacles/${tentacleId}/CONTEXT.md\` or other tentacle markdown files if the completed work changed the reality they describe. If no tentacle docs need updates, say that explicitly.`,
+        `5. **Update tentacle state/docs** before asking for approval. Mark completed items as done in \`${TENTACLES_RELATIVE_PATH}/${tentacleId}/todo.md\`, and update \`${TENTACLES_RELATIVE_PATH}/${tentacleId}/CONTEXT.md\` or other tentacle markdown files if the completed work changed the reality they describe. If no tentacle docs need updates, say that explicitly.`,
         "",
         "6. **Wait for explicit user approval** before creating any commit on the shared main branch. Present a concise summary of the reviewed diff, test results, and tentacle-doc updates first.",
         "",

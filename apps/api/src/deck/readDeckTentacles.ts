@@ -22,8 +22,9 @@ import {
   readAvailableClaudeSkills,
 } from "../claudeSkills";
 import { markTentaclesInitialized } from "../setupState";
+import { TENTACLES_RELATIVE_PATH } from "../terminalRuntime/constants";
 
-const TENTACLES_DIR = ".octogent/tentacles";
+const TENTACLES_DIR = TENTACLES_RELATIVE_PATH;
 const DECK_STATE_PATH = ".octogent/state/deck.json";
 
 const VALID_STATUSES: ReadonlySet<string> = new Set(["idle", "active", "blocked", "needs-review"]);

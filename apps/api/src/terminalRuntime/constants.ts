@@ -3,6 +3,8 @@ export const TERMINAL_REGISTRY_VERSION = 3;
 export const TERMINAL_REGISTRY_RELATIVE_PATH = ".octogent/state/tentacles.json";
 export const TERMINAL_TRANSCRIPT_RELATIVE_PATH = ".octogent/state/transcripts";
 export const TENTACLE_WORKTREE_RELATIVE_PATH = ".octogent/worktrees";
+export const TENTACLES_RELATIVE_PATH = ".octogent/tentacles";
+export const TENTACLE_INTEGRATION_WORKTREES_SUBDIR = "worktrees";
 export const TENTACLE_WORKTREE_BRANCH_PREFIX = "octogent/";
 export const DEFAULT_AGENT_PROVIDER = "claude-code" as const;
 

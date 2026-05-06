@@ -17,6 +17,7 @@ import { resolvePrompt } from "../prompts";
 import { planSwarm } from "../swarmPlanner";
 import { loadSwarmPlanInputs } from "../swarmPlanner/inputs";
 import { MAX_CHILDREN_PER_PARENT, RuntimeInputError } from "../terminalRuntime";
+import { TENTACLES_RELATIVE_PATH } from "../terminalRuntime/constants";
 import type { ApiRouteHandler } from "./routeHelpers";
 import {
   readJsonBodyOrWriteError,
@@ -44,7 +45,7 @@ const buildSingleTodoWorkerPrompt = async ({
   terminalId: string;
   apiPort: string;
 }) => {
-  const tentacleContextPath = join(workspaceCwd, ".octogent/tentacles", tentacleId);
+  const tentacleContextPath = join(workspaceCwd, TENTACLES_RELATIVE_PATH, tentacleId);
 
   return await resolvePrompt(promptsDir, "swarm-worker", {
     tentacleName,
@@ -144,7 +145,7 @@ const DECK_TENTACLE_ITEM_PATTERN = /^\/api\/deck\/tentacles\/([^/]+)$/;
 
 export const handleDeckTentacleItemRoute: ApiRouteHandler = async (
   { request, response, requestUrl, corsOrigin },
-  { workspaceCwd, projectStateDir },
+  { runtime, workspaceCwd, projectStateDir },
 ) => {
   const match = requestUrl.pathname.match(DECK_TENTACLE_ITEM_PATTERN);
   if (!match) return false;
@@ -155,6 +156,23 @@ export const handleDeckTentacleItemRoute: ApiRouteHandler = async (
   }
 
   const tentacleId = decodeURIComponent(match[1] as string);
+
+  // Tear down integration worktrees before removing the tentacle directory
+  // so we do not leak git worktree refs (the tentacle dir contains the
+  // worktree paths; rmSync alone leaves git's worktree registry stale).
+  // If tentacleId is invalid, skip cleanup and let deleteDeckTentacle return
+  // its standard validation error.
+  try {
+    for (const entry of runtime.listTentacleIntegrationWorktrees(tentacleId)) {
+      runtime.removeTentacleIntegrationWorktree(tentacleId, {
+        repoName: entry.repoName,
+        bestEffort: true,
+      });
+    }
+  } catch (error) {
+    if (!(error instanceof RuntimeInputError)) throw error;
+  }
+
   const result = deleteDeckTentacle(workspaceCwd, tentacleId, projectStateDir);
   if (!result.ok) {
     writeJson(response, 404, { error: result.error }, corsOrigin);

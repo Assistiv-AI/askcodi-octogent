@@ -4,6 +4,7 @@ import type { TerminalSnapshot } from "@octogent/core";
 
 import { parseTerminalWorkspaceMode } from "../createApiServer/terminalParsers";
 import { parseTodoProgress, readDeckTentacles, readDeckVaultFile } from "../deck/readDeckTentacles";
+import { TENTACLES_RELATIVE_PATH } from "../terminalRuntime/constants";
 import type { TentacleWorkspaceMode } from "../terminalRuntime/types";
 import type { SwarmTodoItem } from "./index";
 
@@ -85,7 +86,7 @@ export const loadSwarmPlanInputs = (
   const deckEntry = deckTentacles.find((t) => t.tentacleId === tentacleId);
   const tentacleName = deckEntry?.displayName ?? tentacleId;
 
-  const tentacleContextPath = join(workspaceCwd, ".octogent/tentacles", tentacleId);
+  const tentacleContextPath = join(workspaceCwd, TENTACLES_RELATIVE_PATH, tentacleId);
   const parentBaseBranch =
     workerWorkspaceMode === "worktree" ? (baseRef === "HEAD" ? "main" : baseRef) : "main";
 

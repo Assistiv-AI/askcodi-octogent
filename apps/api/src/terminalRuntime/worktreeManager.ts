@@ -1,8 +1,13 @@
-import { existsSync } from "node:fs";
+import { type Dirent, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import type { WorkspaceRepos } from "../workspace/repos";
-import { TENTACLE_WORKTREE_BRANCH_PREFIX, TENTACLE_WORKTREE_RELATIVE_PATH } from "./constants";
+import {
+  TENTACLES_RELATIVE_PATH,
+  TENTACLE_INTEGRATION_WORKTREES_SUBDIR,
+  TENTACLE_WORKTREE_BRANCH_PREFIX,
+  TENTACLE_WORKTREE_RELATIVE_PATH,
+} from "./constants";
 import { toErrorMessage } from "./systemClients";
 import type { GitClient, PersistedTerminal } from "./types";
 import { RuntimeInputError } from "./types";
@@ -24,6 +29,33 @@ type RemoveTentacleWorktreeOptions = {
 type CreateTentacleWorktreeOptions = {
   baseRef?: string;
   repoName?: string;
+};
+
+type CreateTentacleIntegrationWorktreeOptions = {
+  repoName?: string;
+  baseRef?: string;
+};
+
+type RemoveTentacleIntegrationWorktreeOptions = {
+  repoName?: string;
+  bestEffort?: boolean;
+};
+
+export type TentacleIntegrationWorktreeEntry = {
+  repoName: string;
+  path: string;
+};
+
+const assertSafePathSegment = (label: string, value: string): void => {
+  if (
+    value.length === 0 ||
+    value === "." ||
+    value === ".." ||
+    value.includes("/") ||
+    value.includes("\\")
+  ) {
+    throw new RuntimeInputError(`Invalid ${label}: ${value}`);
+  }
 };
 
 /** Resolve the effective worktree identifier for a terminal. */
@@ -165,10 +197,134 @@ export const createWorktreeManager = ({
     }
   };
 
+  // Tentacle-scoped worktrees live at:
+  //   <workspaceCwd>/.octogent/tentacles/<tentacleId>/worktrees/<repoName>/
+  // on branch `octogent/<tentacleId>` per repo. Each repo has its own git
+  // history, so the shared branch name does not collide across repos — it is
+  // a convention, not a coordinated state.
+  const getTentacleIntegrationWorktreesRoot = (tentacleId: string): string => {
+    assertSafePathSegment("tentacleId", tentacleId);
+    return join(
+      workspaceCwd,
+      TENTACLES_RELATIVE_PATH,
+      tentacleId,
+      TENTACLE_INTEGRATION_WORKTREES_SUBDIR,
+    );
+  };
+
+  const getTentacleIntegrationWorktreePath = (tentacleId: string, repoName: string): string => {
+    assertSafePathSegment("repoName", repoName);
+    return join(getTentacleIntegrationWorktreesRoot(tentacleId), repoName);
+  };
+
+  const resolveIntegrationRepoName = (repoName?: string): string => {
+    if (repoName !== undefined) return repoName;
+    const repos = workspaceRepos.list();
+    if (repos.length === 1 && repos[0]) return repos[0].name;
+    if (repos.length === 0) {
+      throw new RuntimeInputError(
+        "No repos registered in this workspace; cannot create tentacle integration worktree.",
+      );
+    }
+    throw new RuntimeInputError(
+      `Workspace has ${repos.length} repos; integration worktree creation requires an explicit repoName.`,
+    );
+  };
+
+  const createTentacleIntegrationWorktree = (
+    tentacleId: string,
+    options: CreateTentacleIntegrationWorktreeOptions = {},
+  ) => {
+    const resolvedRepoName = resolveIntegrationRepoName(options.repoName);
+    const baseRef = options.baseRef ?? "HEAD";
+    // Path helpers validate both tentacleId and repoName as path segments.
+    const worktreePath = getTentacleIntegrationWorktreePath(tentacleId, resolvedRepoName);
+
+    assertWorktreeCreationSupported(resolvedRepoName);
+    if (existsSync(worktreePath)) {
+      throw new RuntimeInputError(`Tentacle integration worktree already exists: ${worktreePath}`);
+    }
+
+    const repoCwd = resolveRepoCwd(resolvedRepoName);
+    try {
+      gitClient.addWorktree({
+        cwd: repoCwd,
+        path: worktreePath,
+        branchName: getTentacleBranchName(tentacleId),
+        baseRef,
+      });
+    } catch (error) {
+      throw new RuntimeInputError(
+        `Unable to create tentacle integration worktree for ${tentacleId} (${resolvedRepoName}): ${toErrorMessage(error)}`,
+      );
+    }
+
+    return { repoName: resolvedRepoName, path: worktreePath };
+  };
+
+  const removeTentacleIntegrationWorktree = (
+    tentacleId: string,
+    options: RemoveTentacleIntegrationWorktreeOptions = {},
+  ) => {
+    const { bestEffort = false } = options;
+    const resolvedRepoName = resolveIntegrationRepoName(options.repoName);
+    const worktreePath = getTentacleIntegrationWorktreePath(tentacleId, resolvedRepoName);
+    const branchName = getTentacleBranchName(tentacleId);
+    const repoCwd = resolveRepoCwd(resolvedRepoName);
+
+    if (existsSync(worktreePath)) {
+      try {
+        gitClient.removeWorktree({ cwd: repoCwd, path: worktreePath });
+      } catch (error) {
+        if (!bestEffort) {
+          throw new RuntimeInputError(
+            `Unable to remove tentacle integration worktree for ${tentacleId} (${resolvedRepoName}): ${toErrorMessage(error)}`,
+          );
+        }
+      }
+    }
+
+    try {
+      gitClient.removeBranch({ cwd: repoCwd, branchName });
+    } catch (error) {
+      if (!bestEffort) {
+        throw new RuntimeInputError(
+          `Unable to remove tentacle integration branch for ${tentacleId} (${resolvedRepoName}): ${toErrorMessage(error)}`,
+        );
+      }
+    }
+  };
+
+  const listTentacleIntegrationWorktrees = (
+    tentacleId: string,
+  ): TentacleIntegrationWorktreeEntry[] => {
+    // getTentacleIntegrationWorktreesRoot validates tentacleId.
+    const root = getTentacleIntegrationWorktreesRoot(tentacleId);
+    if (!existsSync(root)) return [];
+
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(root, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+
+    const results: TentacleIntegrationWorktreeEntry[] = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      results.push({ repoName: entry.name, path: join(root, entry.name) });
+    }
+    results.sort((a, b) => a.repoName.localeCompare(b.repoName));
+    return results;
+  };
+
   return {
     getTentacleWorkspaceCwd,
     createTentacleWorktree,
     hasTentacleWorktree,
     removeTentacleWorktree,
+    createTentacleIntegrationWorktree,
+    removeTentacleIntegrationWorktree,
+    listTentacleIntegrationWorktrees,
   };
 };
