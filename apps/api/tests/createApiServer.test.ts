@@ -4063,4 +4063,137 @@ describe("createApiServer", () => {
       expect(parent?.initialPrompt).not.toContain("octogent/research/worker-0");
     });
   });
+
+  describe("octoboss router endpoint", () => {
+    const seedTentacle = (workspaceCwd: string, name: string, description: string) => {
+      mkdirSync(join(workspaceCwd, ".octogent", "tentacles", name), { recursive: true });
+      writeFileSync(
+        join(workspaceCwd, ".octogent", "tentacles", name, "CONTEXT.md"),
+        `# ${name}\n\n${description}\n`,
+      );
+      writeFileSync(join(workspaceCwd, ".octogent", "tentacles", name, "todo.md"), "# Todo\n");
+    };
+
+    const post = (baseUrl: string, body: Record<string, unknown>) =>
+      fetch(`${baseUrl}/api/octoboss/route`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+    it("routes to an existing tentacle and appends the user request as a todo", async () => {
+      const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+      temporaryDirectories.push(workspaceCwd);
+      seedTentacle(workspaceCwd, "docs", "Docs and guides");
+      const baseUrl = await startServer({ workspaceCwd });
+
+      const response = await post(baseUrl, {
+        userRequest: "Document the auth flow",
+        llmOutput: `{"routedTo": "docs"}`,
+      });
+      expect(response.status).toBe(200);
+      const payload = (await response.json()) as { action: string; tentacleId: string };
+      expect(payload.action).toBe("routed");
+      expect(payload.tentacleId).toBe("docs");
+
+      const todoContent = readFileSync(
+        join(workspaceCwd, ".octogent", "tentacles", "docs", "todo.md"),
+        "utf8",
+      );
+      expect(todoContent).toContain("- [ ] Document the auth flow");
+    });
+
+    it("returns 404 when routing to an unknown tentacle", async () => {
+      const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+      temporaryDirectories.push(workspaceCwd);
+      const baseUrl = await startServer({ workspaceCwd });
+
+      const response = await post(baseUrl, {
+        userRequest: "do a thing",
+        llmOutput: `{"routedTo": "ghost"}`,
+      });
+      expect(response.status).toBe(404);
+    });
+
+    it("creates a new tentacle and seeds its todo with the user request", async () => {
+      const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+      temporaryDirectories.push(workspaceCwd);
+      const baseUrl = await startServer({ workspaceCwd });
+
+      const response = await post(baseUrl, {
+        userRequest: "Implement OAuth2",
+        llmOutput: `{"createTentacle": {"name": "auth", "description": "Auth and sessions"}}`,
+      });
+      expect(response.status).toBe(201);
+      const payload = (await response.json()) as {
+        action: string;
+        tentacle: { tentacleId: string };
+      };
+      expect(payload.action).toBe("created");
+      expect(payload.tentacle.tentacleId).toBe("auth");
+
+      const todoContent = readFileSync(
+        join(workspaceCwd, ".octogent", "tentacles", "auth", "todo.md"),
+        "utf8",
+      );
+      expect(todoContent).toContain("- [ ] Implement OAuth2");
+    });
+
+    it("returns 400 when creating a tentacle with a name that already exists", async () => {
+      const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+      temporaryDirectories.push(workspaceCwd);
+      seedTentacle(workspaceCwd, "auth", "Existing");
+      const baseUrl = await startServer({ workspaceCwd });
+
+      const response = await post(baseUrl, {
+        userRequest: "x",
+        llmOutput: `{"createTentacle": {"name": "auth", "description": "Re-creation attempt"}}`,
+      });
+      expect(response.status).toBe(400);
+    });
+
+    it("returns the clarification question without side effects", async () => {
+      const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+      temporaryDirectories.push(workspaceCwd);
+      const baseUrl = await startServer({ workspaceCwd });
+
+      const response = await post(baseUrl, {
+        userRequest: "fix the thing",
+        llmOutput: `{"needClarification": "Which thing?"}`,
+      });
+      expect(response.status).toBe(200);
+      const payload = (await response.json()) as { action: string; question: string };
+      expect(payload.action).toBe("clarification");
+      expect(payload.question).toBe("Which thing?");
+    });
+
+    it("returns 400 when llmOutput cannot be parsed", async () => {
+      const baseUrl = await startServer();
+
+      const response = await post(baseUrl, {
+        userRequest: "anything",
+        llmOutput: "I have no idea what to do.",
+      });
+      expect(response.status).toBe(400);
+    });
+
+    it("returns 400 when userRequest is missing", async () => {
+      const baseUrl = await startServer();
+
+      const response = await post(baseUrl, {
+        llmOutput: `{"needClarification": "?"}`,
+      });
+      expect(response.status).toBe(400);
+    });
+
+    it("rejects unsupported methods with 405", async () => {
+      const baseUrl = await startServer();
+
+      const response = await fetch(`${baseUrl}/api/octoboss/route`, {
+        method: "GET",
+        headers: { Accept: "application/json" },
+      });
+      expect(response.status).toBe(405);
+    });
+  });
 });

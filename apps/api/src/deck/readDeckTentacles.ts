@@ -31,6 +31,14 @@ const DECK_STATE_PATH = ".octogent/state/deck.json";
 
 const VALID_STATUSES: ReadonlySet<string> = new Set(["idle", "active", "blocked", "needs-review"]);
 
+export const DEFAULT_TENTACLE_COLOR = "#d4a017";
+export const DEFAULT_OCTOPUS_APPEARANCE: DeckOctopusAppearance = {
+  animation: null,
+  expression: null,
+  accessory: null,
+  hairColor: null,
+};
+
 // ─── Deck state (app metadata, separate from agent-facing files) ────────────
 
 type DeckTentacleWorktreeRecord = {

@@ -46,6 +46,7 @@ import {
   handleMonitorFeedRoute,
   handleMonitorRefreshRoute,
 } from "./monitorRoutes";
+import { handleOctobossRouteRoute } from "./octobossRoutes";
 import type {
   ApiRouteHandler,
   RouteHandlerContext,
@@ -132,6 +133,7 @@ const API_ROUTE_MAP: ReadonlyMap<string, readonly ApiRouteHandler[]> = new Map([
     ],
   ],
   ["swarm-plans", [handleSwarmPlanPreviewRoute]],
+  ["octoboss", [handleOctobossRouteRoute]],
   ["terminal-snapshots", [handleTerminalSnapshotsRoute]],
   ["codex", [handleCodexUsageRoute]],
   ["claude", [handleClaudeUsageRoute]],

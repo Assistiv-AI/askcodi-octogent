@@ -1,6 +1,7 @@
 import { join } from "node:path";
 
 import {
+  DEFAULT_TENTACLE_COLOR,
   addTodoItem,
   createDeckTentacle,
   deleteDeckTentacle,
@@ -97,7 +98,7 @@ export const handleDeckTentaclesRoute: ApiRouteHandler = async (
     const body = bodyReadResult.payload as Record<string, unknown> | null;
     const name = body && typeof body.name === "string" ? body.name : "";
     const description = body && typeof body.description === "string" ? body.description : "";
-    const color = body && typeof body.color === "string" ? body.color : "#d4a017";
+    const color = body && typeof body.color === "string" ? body.color : DEFAULT_TENTACLE_COLOR;
     const suggestedSkills =
       body && Array.isArray(body.suggestedSkills)
         ? body.suggestedSkills.filter((skill): skill is string => typeof skill === "string")
