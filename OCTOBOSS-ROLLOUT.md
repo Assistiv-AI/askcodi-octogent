@@ -130,11 +130,72 @@ Tests: 5 new in swarmPlanner.test.ts (16 → 21), 4 new in createApiServer.test.
 
 **PR4.5 complete.** All four tasks shipped: integration worktree path scheme (1), tentacle metadata + HTTP routes (2), auto-cleanup on DONE (3), swarm flip to tentacle branches (4).
 
+### PR5 Task 5 — Octoboss router prompt + endpoint
+
+Files: `prompts/octoboss-router.md`, `apps/api/src/octoboss/router.ts`, `apps/api/src/createApiServer/octobossRoutes.ts`, `apps/api/src/createApiServer/requestHandler.ts`. Tests: `apps/api/tests/octobossRouter.test.ts` (16) + 8 endpoint tests.
+
+- `POST /api/octoboss/route { userRequest, llmOutput }` parses the LLM's text output (tolerates markdown fences and prose), validates the decision, and acts.
+- `executeOctobossDecision` returns a domain-layer discriminated union (`{kind: "routed" | "created" | "clarification" | "not-found" | "create-failed" | "append-failed"}`); the route handler maps `kind` to HTTP status. No HTTP statuses leak into the domain.
+- Route → append user request as a todo to the target tentacle.
+- Create → `createDeckTentacle` with shared defaults (color, octopus) extracted into `readDeckTentacles.ts`, then seed the new tentacle's todo.md with the user request.
+- Clarification → response field, no side effect.
+- O(1) tentacle existence check via `existsSync` on `CONTEXT.md` instead of the heavier `readDeckTentacles` scan.
+
+**Verification:** 277 api tests, 14 core tests, biome clean, tsc clean, build clean.
+
+### PR5 Task 6 — Tentacle self-spawn capability
+
+Files: `prompts/tentacle-orchestrator.md`, `apps/api/src/createApiServer/terminalRoutes.ts`, `apps/api/src/swarmPlanner/index.ts`. Tests: 4 orchestrator-prompt + 2 spawnCommand planner tests.
+
+- `tentacle-orchestrator.md` is auto-appended to a tentacle terminal's initial input draft when the tentacle has incomplete todos AND the new terminal isn't itself a worker. Worker terminals (those with `parentTerminalId` set) skip the orchestrator.
+- The orchestrator instructs the agent to (1) ensure an integration worktree exists via `POST /api/deck/tentacles/<id>/worktrees` (Task 2), (2) get a plan from `POST /api/swarm-plans`, (3) spawn each worker by executing `worker.spawnCommand` directly.
+- `SwarmWorkerSpec.spawnCommand` is a new field — a ready-to-run `node bin/octogent terminal create …` string that uses `--parent-terminal-id "$OCTOGENT_SESSION_ID"` so the same string works whether a swarm parent or a self-spawning tentacle agent runs it. Single source of truth: the human-triggered parent's `workerSpawnCommands` block is now derived from `worker.spawnCommand`.
+- Merge step uses `git for-each-ref` instead of a shell glob (handles the no-match case safely).
+
+**Verification:** 283 api tests, 14 core tests, biome clean, tsc clean, build clean.
+
+### PR5 Task 7 — File-overlap partitioner with sparse checkouts
+
+Files: `apps/api/src/swarmPlanner/index.ts` (`partitionByOverlap`, `scopePredictions`), `apps/api/src/swarmPlanner/inputs.ts` (`parseScopePredictions`), `apps/api/src/terminalRuntime/{types,systemClients,worktreeManager}.ts` (`setSparseCheckout`, `sparsePaths` plumbing), `apps/api/src/terminalRuntime.ts`, `apps/api/src/createApiServer/{terminalRoutes,deckRoutes,swarmPlanRoutes}.ts`, `apps/api/src/cli.ts` (`--sparse-paths`). Tests: 5 partitioner + 4 planner + 5 endpoint integration.
+
+- `SwarmPlanInput.scopePredictions?: Record<number, string[]>` — per-todo predicted file paths.
+- `partitionByOverlap(todos, scopePredictions, k)` — pure function, v1 returns identity grouping. Signature shaped for future bin-packing.
+- `SwarmWorkerSpec.sparsePaths?` derived from the partition; `--sparse-paths '<JSON>'` embedded in the `spawnCommand`.
+- `gitClient.setSparseCheckout({cwd, paths})` runs `git sparse-checkout set --cone -- <paths>` (single call; `--` terminator prevents `-`-prefixed paths from being mis-interpreted as flags).
+- Path validator (`isSafeRelativePath`) rejects empty, absolute, traversal sequences (`..`, `../`, `/../`, `/..`), and leading `-`.
+- Sparse-checkout failure fails worktree creation cleanly (RuntimeInputError → 400; runtime error → 500).
+- `parseScopePredictions` rejects negative indices, non-integer keys, non-array values.
+
+**Deferred (out of scope, signature in place for future):**
+- Real greedy bin-packing across multi-todo workers
+- 30%-of-repo fallback heuristic
+- Octoboss-side prediction generation (Task 5 surface)
+
+**Verification:** 297 api tests, 14 core tests, biome clean, tsc clean, build clean.
+
+### PR5 Task 8 — Web UI surfaces
+
+Files: `apps/web/src/components/CanvasPrimaryView.tsx`.
+
+- Added "New Tentacle" item to the Octoboss right-click menu, mirroring the existing canvas-area menu item.
+
+**Deferred (no current UI surface to attach to):**
+- "Send Message" menu item — would need an inline message form modal; web app has no channel-message UI surface yet.
+- "Spawn-into-tentacle" — overlaps with the existing per-tentacle context menu's "Spawn Agent / Spawn Swarm" actions; no new affordance worth adding.
+- Channel UI typed badges — no channel-message list view exists in the web app today; channel messages are delivered to terminal PTYs and rendered as text. When a dedicated channel log lands, the typed badge can attach there.
+- Empty-state CTA: the canvas already centers the Octoboss node when no tentacles exist (via `useCanvasGraphData`'s persistent octoboss seat). The "spawn your first tentacle" affordance is the right-click → New Tentacle menu (now also available from the octoboss seat).
+
+**Verification:** 297 api tests, 14 core tests, 82 web tests, biome clean, tsc clean, build clean.
+
+**PR5 complete.** All four tasks shipped; deferred items documented above with the surfaces they would attach to.
+
 ---
 
 ## Remaining work
 
-### PR5 — Octoboss as router + tentacle self-spawn + sparse worker checkouts
+(none — both PRs complete. See per-task "Deferred" sections for follow-ups that need an external trigger or new UI surface.)
+
+### Reference: original PR5 scope
 
 #### Task 5: Octoboss router prompt + endpoint
 **What:** A new prompt `prompts/octoboss-router.md` and a server-side handler `apps/api/src/octoboss/router.ts` that, given a user request and the current set of tentacles, returns one of `{routedTo: tentacleId} | {createTentacle: {name, description}} | {needClarification: question}`. The web UI's main entry-point becomes "talk to Octoboss" instead of "click a tentacle".

@@ -1466,6 +1466,19 @@ export const CanvasPrimaryView = ({
                 <button
                   type="button"
                   className="canvas-context-menu-item"
+                  onClick={() => {
+                    setContextMenu(null);
+                    onCreateTentacle?.();
+                  }}
+                >
+                  <span className="canvas-context-menu-icon">
+                    <Hexagon size={14} />
+                  </span>
+                  New Tentacle
+                </button>
+                <button
+                  type="button"
+                  className="canvas-context-menu-item"
                   onClick={() => handleOctobossAction("octoboss-reorganize-todos")}
                 >
                   <span className="canvas-context-menu-icon">
