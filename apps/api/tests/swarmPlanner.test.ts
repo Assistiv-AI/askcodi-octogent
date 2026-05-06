@@ -11,6 +11,7 @@ const baseInput = (overrides: Partial<SwarmPlanInput> = {}): SwarmPlanInput => (
   parentBaseBranch: "main",
   apiPort: 8787,
   maxChildrenPerParent: 9,
+  useTentacleBranches: false,
   ...overrides,
 });
 
@@ -196,6 +197,83 @@ describe("planSwarm — base ref propagation", () => {
       }),
     );
     expect(plan.parent?.promptVariables.baseBranch).toBe("develop");
+  });
+});
+
+describe("planSwarm — tentacle integration branch naming", () => {
+  it("uses legacy octogent/<workerTerminalId> branches when useTentacleBranches=false", () => {
+    const plan = planSwarm(
+      baseInput({
+        useTentacleBranches: false,
+        todos: [
+          { index: 0, text: "a" },
+          { index: 1, text: "b" },
+        ],
+      }),
+    );
+    expect(plan.workers[0]?.branchName).toBe("octogent/api-runtime-swarm-0");
+    expect(plan.workers[1]?.branchName).toBe("octogent/api-runtime-swarm-1");
+  });
+
+  it("uses octogent/<tentacleId>/worker-<n> branches when useTentacleBranches=true", () => {
+    const plan = planSwarm(
+      baseInput({
+        useTentacleBranches: true,
+        baseRef: "octogent/api-runtime",
+        parentBaseBranch: "octogent/api-runtime",
+        todos: [
+          { index: 0, text: "a" },
+          { index: 2, text: "c" },
+        ],
+      }),
+    );
+    expect(plan.workers[0]?.branchName).toBe("octogent/api-runtime/worker-0");
+    expect(plan.workers[1]?.branchName).toBe("octogent/api-runtime/worker-2");
+  });
+
+  it("omits branchName for shared-mode workers regardless of useTentacleBranches", () => {
+    const plan = planSwarm(
+      baseInput({
+        useTentacleBranches: true,
+        workerWorkspaceMode: "shared",
+        todos: [{ index: 0, text: "x" }],
+      }),
+    );
+    expect(plan.workers[0]?.branchName).toBeUndefined();
+  });
+
+  it("threads the new branch name into the worker workspace section of the parent prompt", () => {
+    const plan = planSwarm(
+      baseInput({
+        useTentacleBranches: true,
+        baseRef: "octogent/api-runtime",
+        parentBaseBranch: "octogent/api-runtime",
+        todos: [
+          { index: 0, text: "a" },
+          { index: 1, text: "b" },
+        ],
+      }),
+    );
+    expect(plan.parent?.promptVariables.workerWorkspaceSection).toContain(
+      "octogent/api-runtime/worker-0",
+    );
+    expect(plan.parent?.promptVariables.workerWorkspaceSection).toContain(
+      "octogent/api-runtime/worker-1",
+    );
+  });
+
+  it("threads the new branch name into the worker's own guidelines prompt variable", () => {
+    const plan = planSwarm(
+      baseInput({
+        useTentacleBranches: true,
+        baseRef: "octogent/api-runtime",
+        parentBaseBranch: "octogent/api-runtime",
+        todos: [{ index: 0, text: "a" }],
+      }),
+    );
+    expect(plan.workers[0]?.promptVariables.workspaceGuidelines).toContain(
+      "octogent/api-runtime/worker-0",
+    );
   });
 });
 

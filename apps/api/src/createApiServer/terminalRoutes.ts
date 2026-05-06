@@ -116,6 +116,8 @@ export const handleTerminalsCollectionRoute: ApiRouteHandler = async (
       initialInputDraft?: string;
       autoRenamePromptContext?: string;
       parentTerminalId?: string;
+      baseRef?: string;
+      branchName?: string;
     } = {
       workspaceMode: workspaceModeResult.workspaceMode,
     };
@@ -163,6 +165,20 @@ export const handleTerminalsCollectionRoute: ApiRouteHandler = async (
       bodyPayload.worktreeId.trim().length > 0
     ) {
       createTerminalInput.worktreeId = bodyPayload.worktreeId.trim();
+    }
+    if (
+      bodyPayload &&
+      typeof bodyPayload.baseRef === "string" &&
+      bodyPayload.baseRef.trim().length > 0
+    ) {
+      createTerminalInput.baseRef = bodyPayload.baseRef.trim();
+    }
+    if (
+      bodyPayload &&
+      typeof bodyPayload.branchName === "string" &&
+      bodyPayload.branchName.trim().length > 0
+    ) {
+      createTerminalInput.branchName = bodyPayload.branchName.trim();
     }
 
     // Support prompt resolution via template name + variables, or a raw string.

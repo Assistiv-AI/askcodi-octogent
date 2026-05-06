@@ -6,12 +6,12 @@ import type { WorkspaceRepos } from "../workspace/repos";
 import {
   TENTACLES_RELATIVE_PATH,
   TENTACLE_INTEGRATION_WORKTREES_SUBDIR,
-  TENTACLE_WORKTREE_BRANCH_PREFIX,
   TENTACLE_WORKTREE_RELATIVE_PATH,
+  tentacleBranchName,
 } from "./constants";
 import { toErrorMessage } from "./systemClients";
 import type { GitClient, PersistedTerminal } from "./types";
-import { RuntimeInputError } from "./types";
+import { NoReposRegisteredError, RuntimeInputError } from "./types";
 
 // `workspaceCwd` locates `.octogent/worktrees/`; `workspaceRepos` resolves
 // which repo's working tree each git op should target.
@@ -30,6 +30,9 @@ type RemoveTentacleWorktreeOptions = {
 type CreateTentacleWorktreeOptions = {
   baseRef?: string;
   repoName?: string;
+  /** Override the branch name. Defaults to `octogent/<worktreeId>`. Used by
+   * the swarm flow to anchor worker worktrees on `octogent/<tentacleId>/worker-<n>`. */
+  branchName?: string;
 };
 
 type CreateTentacleIntegrationWorktreeOptions = {
@@ -84,8 +87,7 @@ export const createWorktreeManager = ({
 }: CreateWorktreeManagerOptions) => {
   const getTentacleWorktreePath = (tentacleId: string) =>
     join(workspaceCwd, TENTACLE_WORKTREE_RELATIVE_PATH, tentacleId);
-  const getTentacleBranchName = (tentacleId: string) =>
-    `${TENTACLE_WORKTREE_BRANCH_PREFIX}${tentacleId}`;
+  const getTentacleBranchName = tentacleBranchName;
 
   // Resolve the repo working tree root the git operation should target.
   //
@@ -135,6 +137,7 @@ export const createWorktreeManager = ({
     options: CreateTentacleWorktreeOptions = {},
   ) => {
     const baseRef = options.baseRef ?? "HEAD";
+    const branchName = options.branchName ?? getTentacleBranchName(tentacleId);
 
     assertWorktreeCreationSupported(options.repoName);
     const worktreePath = getTentacleWorktreePath(tentacleId);
@@ -147,7 +150,7 @@ export const createWorktreeManager = ({
       gitClient.addWorktree({
         cwd: repoCwd,
         path: worktreePath,
-        branchName: `${TENTACLE_WORKTREE_BRANCH_PREFIX}${tentacleId}`,
+        branchName,
         baseRef,
       });
     } catch (error) {
@@ -223,7 +226,7 @@ export const createWorktreeManager = ({
     const repos = workspaceRepos.list();
     if (repos.length === 1 && repos[0]) return repos[0].name;
     if (repos.length === 0) {
-      throw new RuntimeInputError(
+      throw new NoReposRegisteredError(
         "No repos registered in this workspace; cannot create tentacle integration worktree.",
       );
     }

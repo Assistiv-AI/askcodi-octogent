@@ -188,6 +188,11 @@ export type GitClient = {
 
 export class RuntimeInputError extends Error {}
 
+/** Subclass surfaced by tentacle integration worktree creation when the
+ * workspace has zero registered repos. Callers can branch on this without
+ * matching error message strings. */
+export class NoReposRegisteredError extends RuntimeInputError {}
+
 export type CreateTerminalRuntimeOptions = {
   workspaceCwd: string;
   projectStateDir?: string | undefined;

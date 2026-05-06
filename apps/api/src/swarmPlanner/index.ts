@@ -1,4 +1,8 @@
-import { TENTACLES_RELATIVE_PATH } from "../terminalRuntime/constants";
+import {
+  TENTACLES_RELATIVE_PATH,
+  tentacleBranchName,
+  tentacleWorkerBranchName,
+} from "../terminalRuntime/constants";
 import type { TentacleWorkspaceMode } from "../terminalRuntime/types";
 
 export type SwarmTodoItem = {
@@ -18,6 +22,10 @@ export type SwarmPlanInput = {
   parentBaseBranch: string;
   apiPort: string | number;
   maxChildrenPerParent: number;
+  /** When true, worker branches are `octogent/<tentacleId>/worker-<n>` anchored
+   * on the tentacle integration branch. When false, worker branches use the
+   * per-terminal scheme `octogent/<workerTerminalId>`. */
+  useTentacleBranches: boolean;
 };
 
 export type SwarmWorkerSpec = {
@@ -28,6 +36,8 @@ export type SwarmWorkerSpec = {
   worktreeId?: string;
   parentTerminalId?: string;
   baseRef?: string;
+  /** Explicit branch name in worktree mode. Omitted in shared mode. */
+  branchName?: string;
   promptTemplate: "swarm-worker";
   promptVariables: Record<string, string>;
   tentacleName: string;
@@ -58,7 +68,7 @@ const shellSingleQuote = (value: string): string => `'${value.replace(/'/g, `'\\
 
 type WorkerTexts = {
   contextIntro: string;
-  guidelines: (terminalId: string) => string;
+  guidelines: (branchName: string) => string;
   commitGuidance: string;
   definitionOfDoneCommitStep: string;
   reminder: string;
@@ -67,8 +77,8 @@ type WorkerTexts = {
 const WORKER_TEXTS: Record<TentacleWorkspaceMode, WorkerTexts> = {
   worktree: {
     contextIntro: "You are working on an isolated worktree branch, not the main branch.",
-    guidelines: (terminalId) =>
-      `- You are working in an isolated git worktree on branch \`octogent/${terminalId}\`. Make changes freely without worrying about conflicts with other agents.`,
+    guidelines: (branchName) =>
+      `- You are working in an isolated git worktree on branch \`${branchName}\`. Make changes freely without worrying about conflicts with other agents.`,
     commitGuidance: "- Commit your changes with a clear commit message describing what you did.",
     definitionOfDoneCommitStep: "Changes are committed with a descriptive message.",
     reminder: "Commit.",
@@ -92,14 +102,20 @@ const WORKER_TEXTS: Record<TentacleWorkspaceMode, WorkerTexts> = {
 
 const buildWorkerWorkspaceSection = (
   mode: TentacleWorkspaceMode,
-  workers: ReadonlyArray<{ terminalId: string; todoIndex: number; todoText: string }>,
+  workers: ReadonlyArray<{
+    terminalId: string;
+    todoIndex: number;
+    todoText: string;
+    branchName?: string;
+  }>,
 ): string =>
   mode === "worktree"
     ? [
         "Each worker commits to its own isolated branch:",
         "",
         ...workers.map(
-          (w) => `- \`octogent/${w.terminalId}\` — item #${w.todoIndex}: ${w.todoText}`,
+          (w) =>
+            `- \`${w.branchName ?? tentacleBranchName(w.terminalId)}\` — item #${w.todoIndex}: ${w.todoText}`,
         ),
       ].join("\n")
     : [
@@ -191,6 +207,7 @@ const buildWorkerPromptVariables = ({
   apiPort,
   workspaceMode,
   parentTerminalId,
+  branchName,
 }: {
   tentacleName: string;
   tentacleId: string;
@@ -200,6 +217,7 @@ const buildWorkerPromptVariables = ({
   apiPort: string;
   workspaceMode: TentacleWorkspaceMode;
   parentTerminalId: string | null;
+  branchName: string | null;
 }): Record<string, string> => {
   const parentSection = parentTerminalId
     ? [
@@ -226,7 +244,9 @@ const buildWorkerPromptVariables = ({
     terminalId,
     apiPort,
     workspaceContextIntro: texts.contextIntro,
-    workspaceGuidelines: texts.guidelines(terminalId),
+    // Branch name is null in shared mode; the WORKER_TEXTS.shared.guidelines
+    // ignores its argument so passing an empty string is safe.
+    workspaceGuidelines: texts.guidelines(branchName ?? ""),
     commitGuidance: texts.commitGuidance,
     definitionOfDoneCommitStep: texts.definitionOfDoneCommitStep,
     workspaceReminder: texts.reminder,
@@ -243,6 +263,8 @@ const buildWorkerSpawnCommand = ({
   todoText,
   workspaceMode,
   promptVariables,
+  branchName,
+  baseRef,
 }: {
   workerTerminalId: string;
   tentacleId: string;
@@ -251,6 +273,8 @@ const buildWorkerSpawnCommand = ({
   todoText: string;
   workspaceMode: TentacleWorkspaceMode;
   promptVariables: Record<string, string>;
+  branchName?: string;
+  baseRef?: string;
 }): string => {
   const variablesJson = JSON.stringify(promptVariables);
   const commandParts = [
@@ -267,6 +291,12 @@ const buildWorkerSpawnCommand = ({
   ];
   if (workspaceMode === "worktree") {
     commandParts.splice(3, 0, `--worktree-id ${shellSingleQuote(workerTerminalId)}`);
+    if (baseRef) {
+      commandParts.push(`--base-ref ${shellSingleQuote(baseRef)}`);
+    }
+    if (branchName) {
+      commandParts.push(`--branch-name ${shellSingleQuote(branchName)}`);
+    }
   }
   return commandParts.join(" ");
 };
@@ -302,6 +332,7 @@ export const planSwarm = (input: SwarmPlanInput): SwarmPlan => {
     parentBaseBranch,
     apiPort,
     maxChildrenPerParent,
+    useTentacleBranches,
   } = input;
 
   const apiPortString = typeof apiPort === "number" ? String(apiPort) : apiPort;
@@ -325,6 +356,12 @@ export const planSwarm = (input: SwarmPlanInput): SwarmPlan => {
 
   const workers: SwarmWorkerSpec[] = targets.map((todo) => {
     const workerTerminalId = `${tentacleId}-swarm-${todo.index}`;
+    const branchName =
+      workerWorkspaceMode === "worktree"
+        ? useTentacleBranches
+          ? tentacleWorkerBranchName(tentacleId, todo.index)
+          : tentacleBranchName(workerTerminalId)
+        : null;
     const promptVariables = buildWorkerPromptVariables({
       tentacleName,
       tentacleId,
@@ -334,6 +371,7 @@ export const planSwarm = (input: SwarmPlanInput): SwarmPlan => {
       apiPort: apiPortString,
       workspaceMode: workerWorkspaceMode,
       parentTerminalId,
+      branchName,
     });
     return {
       terminalId: workerTerminalId,
@@ -343,6 +381,7 @@ export const planSwarm = (input: SwarmPlanInput): SwarmPlan => {
       ...(workerWorkspaceMode === "worktree" ? { worktreeId: workerTerminalId } : {}),
       ...(parentTerminalId ? { parentTerminalId } : {}),
       ...(workerWorkspaceMode === "worktree" ? { baseRef } : {}),
+      ...(branchName ? { branchName } : {}),
       promptTemplate: "swarm-worker" as const,
       promptVariables,
       tentacleName,
@@ -376,6 +415,8 @@ export const planSwarm = (input: SwarmPlanInput): SwarmPlan => {
         todoText: w.todoText,
         workspaceMode: workerWorkspaceMode,
         promptVariables: w.promptVariables,
+        ...(w.branchName ? { branchName: w.branchName } : {}),
+        ...(w.baseRef ? { baseRef: w.baseRef } : {}),
       });
       return `- \`${w.terminalId}\`:\n  \`\`\`bash\n  ${command}\n  \`\`\``;
     })

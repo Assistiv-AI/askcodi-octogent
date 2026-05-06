@@ -55,7 +55,7 @@ export type {
   TentacleWorkspaceMode,
 } from "./terminalRuntime/types";
 export { isTerminalAgentProvider, isTerminalCompletionSoundId } from "./terminalRuntime/types";
-export { RuntimeInputError } from "./terminalRuntime/types";
+export { NoReposRegisteredError, RuntimeInputError } from "./terminalRuntime/types";
 
 export const MAX_CHILDREN_PER_PARENT = 9;
 
@@ -411,6 +411,7 @@ export const createTerminalRuntime = ({
     initialPrompt,
     initialInputDraft,
     baseRef,
+    branchName,
     parentTerminalId,
     nameOrigin,
     autoRenamePromptContext,
@@ -424,6 +425,7 @@ export const createTerminalRuntime = ({
     initialPrompt?: string;
     initialInputDraft?: string;
     baseRef?: string;
+    branchName?: string;
     parentTerminalId?: string;
     nameOrigin?: TerminalNameOrigin;
     autoRenamePromptContext?: string;
@@ -484,7 +486,10 @@ export const createTerminalRuntime = ({
     const effectiveWorktreeId = worktreeId ?? tentacleId;
     const shouldCreateWorktree = workspaceMode === "worktree";
     if (shouldCreateWorktree) {
-      worktreeManager.createTentacleWorktree(effectiveWorktreeId, baseRef ? { baseRef } : {});
+      const worktreeOptions: { baseRef?: string; branchName?: string } = {};
+      if (baseRef) worktreeOptions.baseRef = baseRef;
+      if (branchName) worktreeOptions.branchName = branchName;
+      worktreeManager.createTentacleWorktree(effectiveWorktreeId, worktreeOptions);
     }
 
     if (terminal.agentProvider === "claude-code") {

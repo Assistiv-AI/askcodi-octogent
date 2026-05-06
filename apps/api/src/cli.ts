@@ -407,6 +407,8 @@ const terminalCreate = async () => {
   const autoRenamePromptContext = parseFlag("--auto-rename-prompt-context");
   const promptTemplate = parseFlag("--prompt-template");
   const promptVariables = parseJsonFlag("--prompt-variables");
+  const baseRef = parseFlag("--base-ref");
+  const branchName = parseFlag("--branch-name");
   const apiBase = resolveRuntimeApiBase();
 
   const body: Record<string, unknown> = {};
@@ -421,6 +423,8 @@ const terminalCreate = async () => {
   if (autoRenamePromptContext) body.autoRenamePromptContext = autoRenamePromptContext;
   if (promptTemplate) body.promptTemplate = promptTemplate;
   if (promptVariables) body.promptVariables = promptVariables;
+  if (baseRef) body.baseRef = baseRef;
+  if (branchName) body.branchName = branchName;
 
   try {
     const response = await fetch(`${apiBase}/api/terminals`, {
@@ -695,6 +699,8 @@ const main = async () => {
     --tentacle-id                      Existing tentacle ID to attach to
     --worktree-id                      Explicit worktree ID
     --parent-terminal-id               Parent terminal ID for child terminals
+    --base-ref                         Git ref to branch from (worktree mode)
+    --branch-name                      Override worktree branch name (defaults to octogent/<worktreeId>)
     --prompt-template                  Prompt template name
     --prompt-variables                 JSON object of prompt template variables
   octogent terminal list               List terminal lifecycle state

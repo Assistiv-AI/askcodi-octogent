@@ -19,6 +19,10 @@ export type LoadedSwarmPlanInputs = {
   baseRef: string;
   parentBaseBranch: string;
   workerWorkspaceMode: TentacleWorkspaceMode;
+  /** True when worker branches should anchor on the tentacle integration
+   * branch (`octogent/<tentacleId>/worker-<n>`). Implies the integration
+   * worktree already exists in at least one repo. */
+  useTentacleBranches: boolean;
 };
 
 export type LoadSwarmPlanInputsResult =
@@ -31,6 +35,11 @@ export type LoadSwarmPlanInputsParams = {
   listTerminalSnapshots: () => readonly TerminalSnapshot[];
   body: Record<string, unknown>;
   tentacleId: string;
+  /** Number of integration worktrees the tentacle has on disk. >= 1 means the
+   * `octogent/<tentacleId>` branch exists in at least one repo and worker
+   * branches can anchor on it. Pass 0 (legacy fallback) when no repos are
+   * registered or no integration worktree has been created. */
+  integrationWorktreeCount: number;
 };
 
 export const loadSwarmPlanInputs = (
@@ -76,11 +85,19 @@ export const loadSwarmPlanInputs = (
     }
   }
 
+  // Branch resolution priority:
+  //   1. Tentacle integration worktree exists: anchor workers on
+  //      `octogent/<tentacleId>` and use sub-branch naming `octogent/<tid>/worker-<n>`.
+  //   2. Legacy worktree-mode tentacle terminal exists: same `octogent/<tentacleId>`
+  //      baseRef but legacy per-worker `octogent/<workerTerminalId>` branches.
+  //   3. Otherwise: baseRef = HEAD, legacy per-worker branches.
   const existingTerminals = listTerminalSnapshots();
   const tentacleTerminal = existingTerminals.find(
     (t) => t.tentacleId === tentacleId && t.workspaceMode === "worktree",
   );
-  const baseRef = tentacleTerminal ? `octogent/${tentacleId}` : "HEAD";
+  const useTentacleBranches =
+    workerWorkspaceMode === "worktree" && params.integrationWorktreeCount > 0;
+  const baseRef = useTentacleBranches || tentacleTerminal ? `octogent/${tentacleId}` : "HEAD";
 
   const deckTentacles = readDeckTentacles(workspaceCwd, projectStateDir);
   const deckEntry = deckTentacles.find((t) => t.tentacleId === tentacleId);
@@ -99,6 +116,7 @@ export const loadSwarmPlanInputs = (
       baseRef,
       parentBaseBranch,
       workerWorkspaceMode,
+      useTentacleBranches,
     },
   };
 };

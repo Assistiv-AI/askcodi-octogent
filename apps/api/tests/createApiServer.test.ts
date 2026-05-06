@@ -3914,4 +3914,153 @@ describe("createApiServer", () => {
       expect(gitClient.getWorktree(workerWorktreePath)).toBeNull();
     });
   });
+
+  describe("swarm route — tentacle integration branches", () => {
+    const seedTentacleWithTodos = (workspaceCwd: string, tentacleId: string, todoCount: number) => {
+      mkdirSync(join(workspaceCwd, ".octogent", "tentacles", tentacleId), { recursive: true });
+      writeFileSync(
+        join(workspaceCwd, ".octogent", "tentacles", tentacleId, "CONTEXT.md"),
+        `# ${tentacleId}\n`,
+        "utf8",
+      );
+      const items = Array.from({ length: todoCount }, (_, i) => `- [ ] item ${i}`).join("\n");
+      writeFileSync(
+        join(workspaceCwd, ".octogent", "tentacles", tentacleId, "todo.md"),
+        `# Todo\n\n${items}\n`,
+        "utf8",
+      );
+    };
+
+    it("auto-creates an integration worktree and uses octogent/<tid>/worker-<n> branches when a single repo is registered", async () => {
+      const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+      temporaryDirectories.push(workspaceCwd);
+      execSync("git init -q -b main", { cwd: workspaceCwd });
+      execSync(
+        'git -c user.email=test@example.com -c user.name=Test commit -q --allow-empty -m "init"',
+        { cwd: workspaceCwd },
+      );
+      const repoName = workspaceCwd.split("/").pop() as string;
+      seedTentacleWithTodos(workspaceCwd, "research", 2);
+      const gitClient = new FakeGitClient();
+      const promptsDir = join(process.cwd(), "..", "..", "prompts");
+      const baseUrl = await startServer({ workspaceCwd, gitClient, promptsDir });
+
+      const swarmResponse = await fetch(`${baseUrl}/api/deck/tentacles/research/swarm`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceMode: "worktree" }),
+      });
+      expect(swarmResponse.status).toBe(201);
+
+      const integrationWorktreePath = join(
+        workspaceCwd,
+        ".octogent",
+        "tentacles",
+        "research",
+        "worktrees",
+        repoName,
+      );
+      expect(gitClient.getWorktree(integrationWorktreePath)).toEqual(
+        expect.objectContaining({ branchName: "octogent/research" }),
+      );
+
+      // The parent's prompt mentions sub-branches per worker. Read it from
+      // the persisted registry (the snapshot endpoint omits initialPrompt).
+      const registry = await waitForRegistryDocument<{
+        terminals: Array<{ terminalId: string; initialPrompt?: string }>;
+      }>(workspaceCwd, (doc) =>
+        doc.terminals.some((t) => t.terminalId === "research-swarm-parent"),
+      );
+      const parent = registry.terminals.find((t) => t.terminalId === "research-swarm-parent");
+      expect(parent?.initialPrompt).toContain("octogent/research/worker-0");
+      expect(parent?.initialPrompt).toContain("octogent/research/worker-1");
+      expect(parent?.initialPrompt).toContain("--branch-name 'octogent/research/worker-0'");
+      expect(parent?.initialPrompt).toContain("--base-ref 'octogent/research'");
+    });
+
+    it("returns 400 when multiple repos are registered and no repoName is given", async () => {
+      const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+      temporaryDirectories.push(workspaceCwd);
+      mkdirSync(join(workspaceCwd, "frontend"), { recursive: true });
+      mkdirSync(join(workspaceCwd, "backend"), { recursive: true });
+      execSync("git init -q -b main", { cwd: join(workspaceCwd, "frontend") });
+      execSync(
+        'git -c user.email=test@example.com -c user.name=Test commit -q --allow-empty -m "init"',
+        { cwd: join(workspaceCwd, "frontend") },
+      );
+      execSync("git init -q -b main", { cwd: join(workspaceCwd, "backend") });
+      execSync(
+        'git -c user.email=test@example.com -c user.name=Test commit -q --allow-empty -m "init"',
+        { cwd: join(workspaceCwd, "backend") },
+      );
+      seedTentacleWithTodos(workspaceCwd, "research", 2);
+      const baseUrl = await startServer({ workspaceCwd, gitClient: new FakeGitClient() });
+
+      const swarmResponse = await fetch(`${baseUrl}/api/deck/tentacles/research/swarm`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceMode: "worktree" }),
+      });
+      expect(swarmResponse.status).toBe(400);
+      const body = (await swarmResponse.json()) as { error: string };
+      expect(body.error).toMatch(/repoName/i);
+    });
+
+    it("forwards branchName and baseRef from POST /api/terminals to the git worktree creation", async () => {
+      const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+      temporaryDirectories.push(workspaceCwd);
+      const gitClient = new FakeGitClient();
+      const baseUrl = await startServer({ workspaceCwd, gitClient });
+
+      const create = await fetch(`${baseUrl}/api/terminals`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workspaceMode: "worktree",
+          branchName: "octogent/research/worker-7",
+          baseRef: "octogent/research",
+        }),
+      });
+      expect(create.status).toBe(201);
+
+      const worktreePath = join(workspaceCwd, ".octogent", "worktrees", "terminal-1");
+      expect(gitClient.getWorktree(worktreePath)).toEqual(
+        expect.objectContaining({
+          branchName: "octogent/research/worker-7",
+          baseRef: "octogent/research",
+        }),
+      );
+    });
+
+    it("falls back to legacy worker branches when no repos are registered", async () => {
+      // Existing test setup: tmpdir is not a git repo. The pre-flight skips
+      // creation and the planner uses the legacy branch scheme.
+      const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+      temporaryDirectories.push(workspaceCwd);
+      seedTentacleWithTodos(workspaceCwd, "research", 2);
+      const promptsDir = join(process.cwd(), "..", "..", "prompts");
+      const baseUrl = await startServer({
+        workspaceCwd,
+        gitClient: new FakeGitClient(),
+        promptsDir,
+      });
+
+      const swarmResponse = await fetch(`${baseUrl}/api/deck/tentacles/research/swarm`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceMode: "worktree" }),
+      });
+      expect(swarmResponse.status).toBe(201);
+
+      const registry = await waitForRegistryDocument<{
+        terminals: Array<{ terminalId: string; initialPrompt?: string }>;
+      }>(workspaceCwd, (doc) =>
+        doc.terminals.some((t) => t.terminalId === "research-swarm-parent"),
+      );
+      const parent = registry.terminals.find((t) => t.terminalId === "research-swarm-parent");
+      // Legacy: branches are octogent/<workerTerminalId>, no /worker-<n> suffix.
+      expect(parent?.initialPrompt).toContain("octogent/research-swarm-0");
+      expect(parent?.initialPrompt).not.toContain("octogent/research/worker-0");
+    });
+  });
 });

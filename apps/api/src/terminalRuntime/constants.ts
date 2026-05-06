@@ -6,6 +6,14 @@ export const TENTACLE_WORKTREE_RELATIVE_PATH = ".octogent/worktrees";
 export const TENTACLES_RELATIVE_PATH = ".octogent/tentacles";
 export const TENTACLE_INTEGRATION_WORKTREES_SUBDIR = "worktrees";
 export const TENTACLE_WORKTREE_BRANCH_PREFIX = "octogent/";
+
+export const tentacleBranchName = (tentacleId: string): string =>
+  `${TENTACLE_WORKTREE_BRANCH_PREFIX}${tentacleId}`;
+
+export const tentacleWorkerBranchName = (
+  tentacleId: string,
+  workerIndex: number | string,
+): string => `${tentacleBranchName(tentacleId)}/worker-${workerIndex}`;
 export const DEFAULT_AGENT_PROVIDER = "claude-code" as const;
 
 export const TERMINAL_BOOTSTRAP_COMMANDS: Record<string, string> = {

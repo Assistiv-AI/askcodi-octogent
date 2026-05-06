@@ -39,12 +39,24 @@ export const handleSwarmPlanPreviewRoute: ApiRouteHandler = async (
     return true;
   }
 
+  // Read-only preview: report what would happen if a swarm spawned right now,
+  // including whether worker branches would anchor on the tentacle integration
+  // branch (depends on whether an integration worktree already exists).
+  const integrationWorktreeCount = (() => {
+    try {
+      return runtime.listTentacleIntegrationWorktrees(tentacleId).length;
+    } catch {
+      return 0;
+    }
+  })();
+
   const loaded = loadSwarmPlanInputs({
     workspaceCwd,
     projectStateDir,
     listTerminalSnapshots: () => runtime.listTerminalSnapshots(),
     body,
     tentacleId,
+    integrationWorktreeCount,
   });
   if (!loaded.ok) {
     writeJson(response, loaded.status, { error: loaded.error }, corsOrigin);
@@ -61,6 +73,7 @@ export const handleSwarmPlanPreviewRoute: ApiRouteHandler = async (
     parentBaseBranch: loaded.inputs.parentBaseBranch,
     apiPort: getApiPort(),
     maxChildrenPerParent: MAX_CHILDREN_PER_PARENT,
+    useTentacleBranches: loaded.inputs.useTentacleBranches,
   });
 
   writeJson(response, 200, plan, corsOrigin);

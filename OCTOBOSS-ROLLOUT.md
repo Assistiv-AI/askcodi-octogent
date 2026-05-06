@@ -112,23 +112,27 @@ Tests: 5 new in `apps/api/tests/createApiServer.test.ts` (244 total, was 239).
 - Defer the `removeTentacleWorktree` git op via `queueMicrotask` so the channel POST returns faster on real workspaces (multi-ms git child-process today)
 - Migrate the 4 pre-existing `worktreeId ?? tentacleId` call sites to `getEffectiveWorktreeId`
 
+### PR4.5 Task 4 — Swarm flip to tentacle integration branches
+
+Files: `apps/api/src/cli.ts`, `apps/api/src/terminalRuntime/constants.ts`, `apps/api/src/terminalRuntime/types.ts`, `apps/api/src/terminalRuntime/worktreeManager.ts`, `apps/api/src/terminalRuntime.ts`, `apps/api/src/createApiServer/terminalRoutes.ts`, `apps/api/src/createApiServer/deckRoutes.ts`, `apps/api/src/createApiServer/swarmPlanRoutes.ts`, `apps/api/src/swarmPlanner/index.ts`, `apps/api/src/swarmPlanner/inputs.ts`.
+Tests: 5 new in swarmPlanner.test.ts (16 → 21), 4 new in createApiServer.test.ts (244 → 253 with auto-cleanup-on-DONE 5 already counted).
+
+- Worker branches anchor on the tentacle integration branch when the workspace has registered repos: `octogent/<tentacleId>/worker-<n>` instead of the legacy `octogent/<workerTerminalId>`. Worker baseRef is `octogent/<tentacleId>` (the tentacle integration branch).
+- `worktreeManager.createTentacleWorktree` accepts optional `branchName` to override the default `octogent/<worktreeId>`.
+- `createTerminal` and `POST /api/terminals` thread `baseRef` and `branchName` through to the worktreeManager.
+- CLI `terminal create` parses `--base-ref` and `--branch-name` (the spawn commands the planner emits would otherwise be silently dropped — caught in /simplify).
+- Swarm route auto-creates an integration worktree before spawning workers when one doesn't exist. Multi-repo workspaces require an explicit `repoName` in the request body; single-repo picks the only one. Zero-repo workspaces fall back to the legacy single-repo path.
+- `NoReposRegisteredError` subclass on `RuntimeInputError` so the route distinguishes "no repos → legacy fallback" from "ambiguous repoName → 400" without string matching.
+- `tentacleBranchName(id)` and `tentacleWorkerBranchName(id, idx)` exported from `constants.ts` so worktreeManager and swarmPlanner share one source of branch-naming truth.
+- The completion strategy section already merges into `parentBaseBranch`, which is now the tentacle integration branch when applicable — no further changes needed in the planner.
+
+**Verification:** 253 api tests (was 244), 14 core tests, biome clean, tsc --noEmit clean, full build clean.
+
+**PR4.5 complete.** All four tasks shipped: integration worktree path scheme (1), tentacle metadata + HTTP routes (2), auto-cleanup on DONE (3), swarm flip to tentacle branches (4).
+
 ---
 
 ## Remaining work
-
-### PR4.5 — Tentacle-owned integration worktrees + auto-cleanup
-
-This is the user-visible "tentacles own worktrees" model.
-
-#### Task 3: Auto-cleanup on DONE
-**What:** When a worker terminal sends a `type === "DONE"` channel message and the terminal is a swarm worker (i.e. its `parentTerminalId` is set), clean up the worker's worktree and branch.
-**Where to start:** `apps/api/src/terminalRuntime/channelMessaging.ts` — emit a typed event when a DONE message is queued. Or simpler: extend `sendChannelMessage` to call a `onWorkerDone(workerTerminalId)` hook injected at construction. The hook calls `worktreeManager.removeTentacleWorktree(workerTerminalId, {bestEffort: true})`. Tests confirm: send DONE → worktree removed; send INFO → no-op; send DONE from a non-worker → no-op.
-**Depends on:** PR3's typed envelope (already shipped).
-
-#### Task 4: Swarm route flip to use tentacle integration worktrees
-**What:** Rewrite the multi-worker path in `handleDeckTentacleSwarmRoute` so workers spawn sub-worktrees off the tentacle integration branch (`octogent/<tentacleId>/worker-<n>`) instead of standalone branches.
-**Where to start:** `apps/api/src/createApiServer/deckRoutes.ts` swarm route. Before spawning workers, ensure the tentacle has an integration worktree per repo it owns. Worker baseRef becomes `octogent/<tentacleId>` (the tentacle branch) instead of `HEAD` or the previous fallback. Worker branch becomes `octogent/<tentacleId>/worker-<n>` instead of `octogent/<terminalId>`. The completion strategy in `swarmPlanner` for worktree mode then merges worker branches into the tentacle branch (not into `main` directly).
-**Depends on:** Tasks 1, 2, and the planner update for the new merge target.
 
 ### PR5 — Octoboss as router + tentacle self-spawn + sparse worker checkouts
 

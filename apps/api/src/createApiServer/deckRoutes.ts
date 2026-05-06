@@ -18,7 +18,11 @@ import {
 import { resolvePrompt } from "../prompts";
 import { planSwarm } from "../swarmPlanner";
 import { loadSwarmPlanInputs } from "../swarmPlanner/inputs";
-import { MAX_CHILDREN_PER_PARENT, RuntimeInputError } from "../terminalRuntime";
+import {
+  MAX_CHILDREN_PER_PARENT,
+  NoReposRegisteredError,
+  RuntimeInputError,
+} from "../terminalRuntime";
 import { TENTACLES_RELATIVE_PATH } from "../terminalRuntime/constants";
 import type { ApiRouteHandler } from "./routeHelpers";
 import {
@@ -679,12 +683,51 @@ export const handleDeckTentacleSwarmRoute: ApiRouteHandler = async (
     return true;
   }
 
+  // Pre-flight: when workspaceMode is worktree AND repos are registered, ensure
+  // the tentacle has an integration worktree so worker branches can anchor on
+  // `octogent/<tentacleId>`. Auto-create one for the only registered repo, or
+  // require an explicit `repoName` when multiple are registered. Workspaces
+  // with zero registered repos fall through to the legacy single-repo path.
+  const workspaceModeRaw = typeof body.workspaceMode === "string" ? body.workspaceMode : "worktree";
+  let integrationWorktreeCount = 0;
+  try {
+    integrationWorktreeCount = runtime.listTentacleIntegrationWorktrees(tentacleId).length;
+  } catch {
+    // Invalid tentacle id — let loadSwarmPlanInputs surface the 404.
+  }
+
+  if (workspaceModeRaw === "worktree" && integrationWorktreeCount === 0) {
+    const requestedRepoName =
+      typeof body.repoName === "string" && body.repoName.trim().length > 0
+        ? body.repoName.trim()
+        : undefined;
+    try {
+      runtime.createTentacleIntegrationWorktree(
+        tentacleId,
+        requestedRepoName === undefined ? {} : { repoName: requestedRepoName },
+      );
+      integrationWorktreeCount = 1;
+    } catch (error) {
+      // No repos registered → legacy fallback.
+      // Other RuntimeInputErrors (ambiguous / unknown repoName, branch exists) → 400.
+      if (error instanceof NoReposRegisteredError) {
+        // legacy path; integrationWorktreeCount stays 0
+      } else if (error instanceof RuntimeInputError) {
+        writeJson(response, 400, { error: error.message }, corsOrigin);
+        return true;
+      } else {
+        throw error;
+      }
+    }
+  }
+
   const loaded = loadSwarmPlanInputs({
     workspaceCwd,
     projectStateDir,
     listTerminalSnapshots: () => existingTerminals,
     body,
     tentacleId,
+    integrationWorktreeCount,
   });
   if (!loaded.ok) {
     writeJson(response, loaded.status, { error: loaded.error }, corsOrigin);
@@ -702,6 +745,7 @@ export const handleDeckTentacleSwarmRoute: ApiRouteHandler = async (
     parentBaseBranch: loaded.inputs.parentBaseBranch,
     apiPort,
     maxChildrenPerParent: MAX_CHILDREN_PER_PARENT,
+    useTentacleBranches: loaded.inputs.useTentacleBranches,
   });
 
   try {
