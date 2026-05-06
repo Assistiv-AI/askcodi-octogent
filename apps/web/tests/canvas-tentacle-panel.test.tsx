@@ -24,6 +24,7 @@ const tentacle = {
     { text: "Consolidate principles", done: false },
   ],
   suggestedSkills: ["docs-writer", "release-helper"],
+  worktrees: [],
 };
 
 describe("CanvasTentaclePanel actions", () => {

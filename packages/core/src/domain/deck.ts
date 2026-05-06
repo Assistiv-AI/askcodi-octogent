@@ -14,6 +14,13 @@ export type DeckAvailableSkill = {
   source: "project" | "user";
 };
 
+export type DeckTentacleWorktreeEntry = {
+  repoName: string;
+  /** ISO timestamp from deck state, or null if the worktree was discovered on
+   * disk but has no persisted record (e.g. created out-of-band). */
+  createdAt: string | null;
+};
+
 export type DeckTentacleSummary = {
   tentacleId: string;
   displayName: string;
@@ -30,4 +37,5 @@ export type DeckTentacleSummary = {
   todoDone: number;
   todoItems: { text: string; done: boolean }[];
   suggestedSkills: string[];
+  worktrees: DeckTentacleWorktreeEntry[];
 };

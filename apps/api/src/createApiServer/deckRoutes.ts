@@ -10,7 +10,9 @@ import {
   parseTodoProgress,
   readDeckTentacles,
   readDeckVaultFile,
+  setTentacleWorktreeMetadata,
   toggleTodoItem,
+  unsetTentacleWorktreeMetadata,
   updateDeckTentacleSuggestedSkills,
 } from "../deck/readDeckTentacles";
 import { resolvePrompt } from "../prompts";
@@ -248,6 +250,111 @@ export const handleDeckTentacleSkillsRoute: ApiRouteHandler = async (
   }
 
   writeJson(response, 200, updated, corsOrigin);
+  return true;
+};
+
+// ---------------------------------------------------------------------------
+// Deck — Tentacle integration worktrees
+// ---------------------------------------------------------------------------
+
+const DECK_TENTACLE_WORKTREES_PATTERN = /^\/api\/deck\/tentacles\/([^/]+)\/worktrees$/;
+const DECK_TENTACLE_WORKTREE_ITEM_PATTERN = /^\/api\/deck\/tentacles\/([^/]+)\/worktrees\/([^/]+)$/;
+
+const findTentacleSummary = (workspaceCwd: string, projectStateDir: string, tentacleId: string) =>
+  readDeckTentacles(workspaceCwd, projectStateDir).find((t) => t.tentacleId === tentacleId);
+
+export const handleDeckTentacleWorktreesRoute: ApiRouteHandler = async (
+  { request, response, requestUrl, corsOrigin },
+  { runtime, workspaceCwd, projectStateDir },
+) => {
+  const match = requestUrl.pathname.match(DECK_TENTACLE_WORKTREES_PATTERN);
+  if (!match) return false;
+  if (request.method !== "POST") {
+    writeMethodNotAllowed(response, corsOrigin);
+    return true;
+  }
+
+  const tentacleId = decodeURIComponent(match[1] as string);
+  if (!findTentacleSummary(workspaceCwd, projectStateDir, tentacleId)) {
+    writeJson(response, 404, { error: "Tentacle not found" }, corsOrigin);
+    return true;
+  }
+
+  const body = await readJsonBodyOrWriteError(request, response, corsOrigin);
+  if (!body.ok) return true;
+  const payload = (body.payload ?? {}) as Record<string, unknown>;
+
+  const repoName = typeof payload.repoName === "string" ? payload.repoName.trim() : "";
+  if (!repoName) {
+    writeJson(response, 400, { error: "repoName is required" }, corsOrigin);
+    return true;
+  }
+
+  const baseRef = typeof payload.baseRef === "string" ? payload.baseRef : undefined;
+
+  // Filesystem is the source of truth for which worktrees exist; deck metadata
+  // is the createdAt cache, written only after the worktree creation succeeds.
+  try {
+    runtime.createTentacleIntegrationWorktree(
+      tentacleId,
+      baseRef === undefined ? { repoName } : { repoName, baseRef },
+    );
+  } catch (error) {
+    if (error instanceof RuntimeInputError) {
+      writeJson(response, 400, { error: error.message }, corsOrigin);
+      return true;
+    }
+    throw error;
+  }
+
+  setTentacleWorktreeMetadata(workspaceCwd, tentacleId, repoName, projectStateDir);
+
+  const refreshed = findTentacleSummary(workspaceCwd, projectStateDir, tentacleId);
+  if (!refreshed) {
+    writeJson(response, 500, { error: "Tentacle missing after worktree creation" }, corsOrigin);
+    return true;
+  }
+  writeJson(response, 201, refreshed, corsOrigin);
+  return true;
+};
+
+export const handleDeckTentacleWorktreeItemRoute: ApiRouteHandler = async (
+  { request, response, requestUrl, corsOrigin },
+  { runtime, workspaceCwd, projectStateDir },
+) => {
+  const match = requestUrl.pathname.match(DECK_TENTACLE_WORKTREE_ITEM_PATTERN);
+  if (!match) return false;
+  if (request.method !== "DELETE") {
+    writeMethodNotAllowed(response, corsOrigin);
+    return true;
+  }
+
+  const tentacleId = decodeURIComponent(match[1] as string);
+  const repoName = decodeURIComponent(match[2] as string);
+
+  if (!findTentacleSummary(workspaceCwd, projectStateDir, tentacleId)) {
+    writeJson(response, 404, { error: "Tentacle not found" }, corsOrigin);
+    return true;
+  }
+
+  // Idempotent: a missing worktree still clears stale deck metadata and returns 204.
+  // The pre-scan also avoids 400ing on `repoName` values that are no longer registered.
+  const onDisk = runtime.listTentacleIntegrationWorktrees(tentacleId);
+  if (onDisk.some((entry) => entry.repoName === repoName)) {
+    try {
+      runtime.removeTentacleIntegrationWorktree(tentacleId, { repoName, bestEffort: true });
+    } catch (error) {
+      if (error instanceof RuntimeInputError) {
+        writeJson(response, 400, { error: error.message }, corsOrigin);
+        return true;
+      }
+      throw error;
+    }
+  }
+
+  unsetTentacleWorktreeMetadata(workspaceCwd, tentacleId, repoName, projectStateDir);
+
+  writeNoContent(response, 204, corsOrigin);
   return true;
 };
 

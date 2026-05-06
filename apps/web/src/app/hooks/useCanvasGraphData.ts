@@ -148,6 +148,20 @@ const normalizeDeckTentacleSummary = (value: unknown): DeckTentacleSummary | nul
     suggestedSkills: Array.isArray(record.suggestedSkills)
       ? record.suggestedSkills.filter((skill): skill is string => typeof skill === "string")
       : [],
+    worktrees: Array.isArray(record.worktrees)
+      ? record.worktrees
+          .map((entry) => {
+            if (entry === null || typeof entry !== "object") return null;
+            const worktreeRecord = entry as Record<string, unknown>;
+            if (typeof worktreeRecord.repoName !== "string") return null;
+            const createdAt =
+              typeof worktreeRecord.createdAt === "string" ? worktreeRecord.createdAt : null;
+            return { repoName: worktreeRecord.repoName, createdAt };
+          })
+          .filter(
+            (entry): entry is { repoName: string; createdAt: string | null } => entry !== null,
+          )
+      : [],
   };
 };
 

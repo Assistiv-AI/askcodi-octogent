@@ -1,6 +1,7 @@
-import { type Dirent, existsSync, readdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 
+import { listTentacleWorktreesOnDisk } from "../deck/tentacleWorktreesOnDisk";
 import type { WorkspaceRepos } from "../workspace/repos";
 import {
   TENTACLES_RELATIVE_PATH,
@@ -298,24 +299,8 @@ export const createWorktreeManager = ({
   const listTentacleIntegrationWorktrees = (
     tentacleId: string,
   ): TentacleIntegrationWorktreeEntry[] => {
-    // getTentacleIntegrationWorktreesRoot validates tentacleId.
-    const root = getTentacleIntegrationWorktreesRoot(tentacleId);
-    if (!existsSync(root)) return [];
-
-    let entries: Dirent[];
-    try {
-      entries = readdirSync(root, { withFileTypes: true });
-    } catch {
-      return [];
-    }
-
-    const results: TentacleIntegrationWorktreeEntry[] = [];
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      results.push({ repoName: entry.name, path: join(root, entry.name) });
-    }
-    results.sort((a, b) => a.repoName.localeCompare(b.repoName));
-    return results;
+    assertSafePathSegment("tentacleId", tentacleId);
+    return listTentacleWorktreesOnDisk(workspaceCwd, tentacleId);
   };
 
   return {

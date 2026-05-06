@@ -14,6 +14,7 @@ import type {
   DeckOctopusAppearance,
   DeckTentacleStatus,
   DeckTentacleSummary,
+  DeckTentacleWorktreeEntry,
 } from "@octogent/core";
 
 import {
@@ -23,6 +24,7 @@ import {
 } from "../claudeSkills";
 import { markTentaclesInitialized } from "../setupState";
 import { TENTACLES_RELATIVE_PATH } from "../terminalRuntime/constants";
+import { listTentacleWorktreesOnDisk } from "./tentacleWorktreesOnDisk";
 
 const TENTACLES_DIR = TENTACLES_RELATIVE_PATH;
 const DECK_STATE_PATH = ".octogent/state/deck.json";
@@ -31,11 +33,16 @@ const VALID_STATUSES: ReadonlySet<string> = new Set(["idle", "active", "blocked"
 
 // ─── Deck state (app metadata, separate from agent-facing files) ────────────
 
+type DeckTentacleWorktreeRecord = {
+  createdAt: string;
+};
+
 type DeckTentacleState = {
   color: string | null;
   status: DeckTentacleStatus;
   octopus: DeckOctopusAppearance;
   scope: { paths: string[]; tags: string[] };
+  worktrees: Record<string, DeckTentacleWorktreeRecord>;
 };
 
 type DeckStateDocument = {
@@ -73,6 +80,7 @@ const parseTentacleState = (raw: unknown): DeckTentacleState => {
     status: "idle",
     octopus: { animation: null, expression: null, accessory: null, hairColor: null },
     scope: { paths: [], tags: [] },
+    worktrees: {},
   };
 
   if (raw === null || typeof raw !== "object") return defaults;
@@ -110,7 +118,18 @@ const parseTentacleState = (raw: unknown): DeckTentacleState => {
     }
   }
 
-  return { color, status, octopus, scope };
+  const worktrees: Record<string, DeckTentacleWorktreeRecord> = {};
+  if (rec.worktrees !== null && typeof rec.worktrees === "object") {
+    for (const [repoName, value] of Object.entries(rec.worktrees as Record<string, unknown>)) {
+      if (value === null || typeof value !== "object") continue;
+      const wRec = value as Record<string, unknown>;
+      if (typeof wRec.createdAt === "string") {
+        worktrees[repoName] = { createdAt: wRec.createdAt };
+      }
+    }
+  }
+
+  return { color, status, octopus, scope, worktrees };
 };
 
 // ─── Parse CONTEXT.md for title and description ───────────────────────────────
@@ -241,6 +260,17 @@ export const readDeckTentacles = (
       }
     }
 
+    // Filesystem is the source of truth for which worktrees exist; deck state
+    // contributes the createdAt cache. Stale deck records (no fs entry) are
+    // dropped automatically.
+    const worktrees: DeckTentacleWorktreeEntry[] = listTentacleWorktreesOnDisk(
+      workspaceCwd,
+      entry,
+    ).map((wt) => ({
+      repoName: wt.repoName,
+      createdAt: state.worktrees[wt.repoName]?.createdAt ?? null,
+    }));
+
     results.push({
       tentacleId: entry,
       displayName: agentInfo.displayName,
@@ -254,6 +284,7 @@ export const readDeckTentacles = (
       todoDone,
       todoItems,
       suggestedSkills: agentInfo.suggestedSkills,
+      worktrees,
     });
   }
 
@@ -516,6 +547,7 @@ export const createDeckTentacle = (
     status: "idle",
     octopus: input.octopus,
     scope: { paths: [], tags: [] },
+    worktrees: {},
   };
   writeDeckState(stateDir, deckState);
   markTentaclesInitialized(stateDir);
@@ -535,8 +567,43 @@ export const createDeckTentacle = (
       todoDone: 0,
       todoItems: [],
       suggestedSkills,
+      worktrees: [],
     },
   };
+};
+
+/** Persist a worktree createdAt timestamp in deck state. No-op when the
+ * tentacle has no existing deck record (avoids fabricating ghost entries for
+ * unknown tentacleIds). The on-disk worktree directory is the source of truth
+ * for "which worktrees exist"; this only stores the timestamp cache. */
+export const setTentacleWorktreeMetadata = (
+  workspaceCwd: string,
+  tentacleId: string,
+  repoName: string,
+  projectStateDir?: string,
+): void => {
+  if (tentacleId.includes("..") || tentacleId.includes("/")) return;
+  const stateDir = projectStateDir ?? join(workspaceCwd, ".octogent");
+  const deckState = readDeckState(stateDir);
+  const tentacle = deckState.tentacles[tentacleId];
+  if (!tentacle) return;
+  tentacle.worktrees[repoName] = { createdAt: new Date().toISOString() };
+  writeDeckState(stateDir, deckState);
+};
+
+export const unsetTentacleWorktreeMetadata = (
+  workspaceCwd: string,
+  tentacleId: string,
+  repoName: string,
+  projectStateDir?: string,
+): void => {
+  if (tentacleId.includes("..") || tentacleId.includes("/")) return;
+  const stateDir = projectStateDir ?? join(workspaceCwd, ".octogent");
+  const deckState = readDeckState(stateDir);
+  const tentacle = deckState.tentacles[tentacleId];
+  if (!tentacle || !(repoName in tentacle.worktrees)) return;
+  delete tentacle.worktrees[repoName];
+  writeDeckState(stateDir, deckState);
 };
 
 export const listDeckAvailableSkills = (workspaceCwd: string): DeckAvailableSkill[] =>

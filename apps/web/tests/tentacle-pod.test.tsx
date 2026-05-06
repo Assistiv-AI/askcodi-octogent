@@ -27,6 +27,7 @@ describe("TentaclePod skill editor", () => {
           todoDone: 0,
           todoItems: [],
           suggestedSkills: ["docs-writer"],
+          worktrees: [],
         }}
         visuals={{
           color: "#ff6b2b",

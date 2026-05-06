@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
@@ -111,6 +112,7 @@ class FakeGitClient implements GitClient {
     this.pushesByCwd.delete(path);
     this.syncsByCwd.delete(path);
     this.pullRequestByCwd.delete(path);
+    rmSync(path, { recursive: true, force: true });
   }
 
   removeBranch({ branchName }: { cwd: string; branchName: string }): void {
@@ -1555,6 +1557,203 @@ describe("createApiServer", () => {
     );
     expect(readFileSync(contextPath, "utf8")).not.toContain("## Suggested Skills");
     expect(readFileSync(contextPath, "utf8")).not.toContain("octogent:suggested-skills:start");
+  });
+
+  describe("tentacle integration worktrees", () => {
+    const startServerWithRepo = async () => {
+      const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+      temporaryDirectories.push(workspaceCwd);
+      execSync("git init -q -b main", { cwd: workspaceCwd });
+      execSync(
+        'git -c user.email=test@example.com -c user.name=Test commit -q --allow-empty -m "init"',
+        { cwd: workspaceCwd },
+      );
+      const repoName = workspaceCwd.split("/").pop() as string;
+      const baseUrl = await startServer({ workspaceCwd });
+      return { baseUrl, workspaceCwd, repoName };
+    };
+
+    const createDocsTentacle = async (baseUrl: string) => {
+      const response = await fetch(`${baseUrl}/api/deck/tentacles`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "docs", description: "Docs and guides" }),
+      });
+      expect(response.status).toBe(201);
+    };
+
+    it("returns empty worktrees array on a fresh tentacle summary", async () => {
+      const { baseUrl } = await startServerWithRepo();
+      await createDocsTentacle(baseUrl);
+
+      const listResponse = await fetch(`${baseUrl}/api/deck/tentacles`, {
+        headers: { Accept: "application/json" },
+      });
+      const tentacles = (await listResponse.json()) as Array<{
+        tentacleId: string;
+        worktrees: Array<{ repoName: string; createdAt: string | null }>;
+      }>;
+      const docs = tentacles.find((t) => t.tentacleId === "docs");
+      expect(docs?.worktrees).toEqual([]);
+    });
+
+    it("creates a worktree, persists createdAt, and surfaces it on the tentacle summary", async () => {
+      const { baseUrl, repoName } = await startServerWithRepo();
+      await createDocsTentacle(baseUrl);
+
+      const before = Date.now();
+      const createResponse = await fetch(`${baseUrl}/api/deck/tentacles/docs/worktrees`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ repoName }),
+      });
+      expect(createResponse.status).toBe(201);
+      const summary = (await createResponse.json()) as {
+        tentacleId: string;
+        worktrees: Array<{ repoName: string; createdAt: string | null }>;
+      };
+      expect(summary.tentacleId).toBe("docs");
+      expect(summary.worktrees).toHaveLength(1);
+      expect(summary.worktrees[0]?.repoName).toBe(repoName);
+      expect(summary.worktrees[0]?.createdAt).toBeTypeOf("string");
+      const createdAtMs = Date.parse(summary.worktrees[0]?.createdAt as string);
+      expect(createdAtMs).toBeGreaterThanOrEqual(before);
+    });
+
+    it("rejects POST when repoName is missing", async () => {
+      const { baseUrl } = await startServerWithRepo();
+      await createDocsTentacle(baseUrl);
+
+      const response = await fetch(`${baseUrl}/api/deck/tentacles/docs/worktrees`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      expect(response.status).toBe(400);
+    });
+
+    it("returns 404 when POSTing to a non-existent tentacle", async () => {
+      const { baseUrl, repoName } = await startServerWithRepo();
+
+      const response = await fetch(`${baseUrl}/api/deck/tentacles/ghost/worktrees`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ repoName }),
+      });
+      expect(response.status).toBe(404);
+    });
+
+    it("returns 400 when the worktree path already exists on disk", async () => {
+      const { baseUrl, repoName } = await startServerWithRepo();
+      await createDocsTentacle(baseUrl);
+
+      const first = await fetch(`${baseUrl}/api/deck/tentacles/docs/worktrees`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ repoName }),
+      });
+      expect(first.status).toBe(201);
+
+      const second = await fetch(`${baseUrl}/api/deck/tentacles/docs/worktrees`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ repoName }),
+      });
+      expect(second.status).toBe(400);
+    });
+
+    it("removes a worktree and clears it from the summary", async () => {
+      const { baseUrl, repoName } = await startServerWithRepo();
+      await createDocsTentacle(baseUrl);
+
+      const create = await fetch(`${baseUrl}/api/deck/tentacles/docs/worktrees`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ repoName }),
+      });
+      expect(create.status).toBe(201);
+
+      const remove = await fetch(
+        `${baseUrl}/api/deck/tentacles/docs/worktrees/${encodeURIComponent(repoName)}`,
+        { method: "DELETE", headers: { Accept: "application/json" } },
+      );
+      expect(remove.status).toBe(204);
+
+      const listResponse = await fetch(`${baseUrl}/api/deck/tentacles`, {
+        headers: { Accept: "application/json" },
+      });
+      const tentacles = (await listResponse.json()) as Array<{
+        tentacleId: string;
+        worktrees: Array<{ repoName: string }>;
+      }>;
+      const docs = tentacles.find((t) => t.tentacleId === "docs");
+      expect(docs?.worktrees).toEqual([]);
+    });
+
+    it("returns 204 on DELETE when the worktree was never created (idempotent)", async () => {
+      const { baseUrl } = await startServerWithRepo();
+      await createDocsTentacle(baseUrl);
+
+      const response = await fetch(`${baseUrl}/api/deck/tentacles/docs/worktrees/never-existed`, {
+        method: "DELETE",
+        headers: { Accept: "application/json" },
+      });
+      expect(response.status).toBe(204);
+    });
+
+    it("returns 404 on DELETE when the tentacle does not exist", async () => {
+      const { baseUrl, repoName } = await startServerWithRepo();
+
+      const response = await fetch(
+        `${baseUrl}/api/deck/tentacles/ghost/worktrees/${encodeURIComponent(repoName)}`,
+        { method: "DELETE", headers: { Accept: "application/json" } },
+      );
+      expect(response.status).toBe(404);
+    });
+
+    it("rejects unsupported methods with 405", async () => {
+      const { baseUrl, repoName } = await startServerWithRepo();
+      await createDocsTentacle(baseUrl);
+
+      const getResponse = await fetch(`${baseUrl}/api/deck/tentacles/docs/worktrees`, {
+        method: "GET",
+        headers: { Accept: "application/json" },
+      });
+      expect(getResponse.status).toBe(405);
+
+      const itemPutResponse = await fetch(
+        `${baseUrl}/api/deck/tentacles/docs/worktrees/${encodeURIComponent(repoName)}`,
+        {
+          method: "PUT",
+          headers: { Accept: "application/json", "Content-Type": "application/json" },
+          body: "{}",
+        },
+      );
+      expect(itemPutResponse.status).toBe(405);
+    });
+
+    it("clears worktrees from deck state when the parent tentacle is deleted", async () => {
+      const { baseUrl, repoName } = await startServerWithRepo();
+      await createDocsTentacle(baseUrl);
+
+      const create = await fetch(`${baseUrl}/api/deck/tentacles/docs/worktrees`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ repoName }),
+      });
+      expect(create.status).toBe(201);
+
+      const deleteResponse = await fetch(`${baseUrl}/api/deck/tentacles/docs`, {
+        method: "DELETE",
+      });
+      expect(deleteResponse.status).toBe(204);
+
+      const listResponse = await fetch(`${baseUrl}/api/deck/tentacles`, {
+        headers: { Accept: "application/json" },
+      });
+      const tentacles = (await listResponse.json()) as Array<{ tentacleId: string }>;
+      expect(tentacles.find((t) => t.tentacleId === "docs")).toBeUndefined();
+    });
   });
 
   it("returns 400 for unsupported tentacle completion sound values", async () => {

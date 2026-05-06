@@ -80,6 +80,22 @@ Tests: `apps/api/tests/tentacleIntegrationWorktree.test.ts` (17).
 
 **Verification:** 229 api tests (212 + 17 new), 14 core tests, biome clean (99 files), tsc --noEmit clean, full build clean.
 
+### PR4.5 Task 2 — Tentacle integration worktree metadata + HTTP routes
+
+Files: `packages/core/src/domain/deck.ts`, `apps/api/src/deck/readDeckTentacles.ts`, `apps/api/src/deck/tentacleWorktreesOnDisk.ts` (new), `apps/api/src/terminalRuntime/worktreeManager.ts`, `apps/api/src/createApiServer/deckRoutes.ts`, `apps/api/src/createApiServer/requestHandler.ts`, `apps/web/src/app/hooks/useCanvasGraphData.ts`.
+Tests: 10 new in `apps/api/tests/createApiServer.test.ts` (89 → was 79).
+
+- `DeckTentacleSummary` gains `worktrees: Array<{repoName, createdAt: string | null}>`. Always present, default `[]`.
+- Filesystem-as-truth design: the summary's `worktrees` is built by scanning `.octogent/tentacles/<id>/worktrees/` and enriched with `createdAt` from `deck.json`. Stale deck records (no fs entry) are filtered out automatically.
+- `DeckTentacleState.worktrees: Record<string, {createdAt: string}>` persisted to `deck.json`.
+- New shared helper `apps/api/src/deck/tentacleWorktreesOnDisk.ts` so worktreeManager and deck summary loader use one fs scan implementation.
+- Public deck helpers `setTentacleWorktreeMetadata` / `unsetTentacleWorktreeMetadata`. Set is a no-op when the tentacle has no existing deck record (avoids ghost entries for unknown ids).
+- Routes: `POST /api/deck/tentacles/<id>/worktrees {repoName, baseRef?}` returns 201 with refreshed summary; 400 on RuntimeInputError, 404 on missing tentacle. `DELETE /api/deck/tentacles/<id>/worktrees/<repoName>` returns 204; idempotent (missing fs entry still clears stale deck metadata).
+- Order of ops: POST creates worktree first (expensive), then writes deck metadata. DELETE removes fs entry first (bestEffort), then unsets deck metadata.
+- Web normalizer extended to parse `worktrees` from API responses; web test fixtures updated.
+
+**Verification:** 239 api tests (229 + 10), 14 core tests, biome clean, tsc --noEmit clean, full build clean.
+
 ---
 
 ## Remaining work
@@ -87,10 +103,6 @@ Tests: `apps/api/tests/tentacleIntegrationWorktree.test.ts` (17).
 ### PR4.5 — Tentacle-owned integration worktrees + auto-cleanup
 
 This is the user-visible "tentacles own worktrees" model.
-
-#### Task 2: Tentacle config records which repos it owns worktrees for
-**What:** Extend the tentacle metadata so a tentacle can declare which repos it has integration worktrees in. Used by the swarm route, the deletion path, and the UI.
-**Where to start:** `apps/api/src/deck/readDeckTentacles.ts` (search for `DeckTentacle` shape). Add `worktrees?: Array<{repoName: string; createdAt: string}>`. Persist via the existing deck mechanism. Add API: `POST /api/deck/tentacles/<id>/worktrees {repoName}` and `DELETE /api/deck/tentacles/<id>/worktrees/<repoName>`. Each calls `runtime.createTentacleIntegrationWorktree` / `runtime.removeTentacleIntegrationWorktree` from Task 1. The deck deletion route already calls `removeTentacleIntegrationWorktree(bestEffort: true)` for every entry from `listTentacleIntegrationWorktrees(tentacleId)` — Task 2's persisted metadata can reuse that pattern when worktrees go stale.
 
 #### Task 3: Auto-cleanup on DONE
 **What:** When a worker terminal sends a `type === "DONE"` channel message and the terminal is a swarm worker (i.e. its `parentTerminalId` is set), clean up the worker's worktree and branch.
